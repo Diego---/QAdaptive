@@ -1,4 +1,8 @@
+import random
+
 from qiskit import QuantumCircuit
+from qiskit.circuit import ParameterVector, CircuitInstruction
+from qiskit.transpiler.passes import RemoveBarriers
 from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 
 INSTRUCTION_MAP = get_standard_gate_name_mapping()
@@ -40,24 +44,69 @@ class AdaptiveAnsatz:
             assert not incorrect_gate_names,(
                 f"The following gates are not part of the starndard gates: {incorrect_gate_names}"
             )
-        
-        self.current_ansatz = initial_ansatz.copy()
+            
+        self.operator_pool = operator_pool
         self.track_history = track_history
-        self.history: list[QuantumCircuit] = [initial_ansatz.copy()] if track_history else []
+        
+        ansatz_no_barriers = RemoveBarriers()(initial_ansatz)
+        # Extract existing parameters
+        existing_params = list(ansatz_no_barriers)
+        num_params = len(existing_params)
 
-    def add_gate(self, gate, qubits: list[int]) -> None:
+        # Create a ParameterVector and replace parameters
+        self.param_vector = ParameterVector("theta", num_params)
+        param_map = {p: self.param_vector[i] for i, p in enumerate(existing_params)}
+        
+        self.current_ansatz = ansatz_no_barriers.assign_parameters(param_map)
+        self.history: list[QuantumCircuit] = [self.current_ansatz] if track_history else []
+        
+    def add_gate_at_index(self, gate_name: str, index: int, qubits: list[int]) -> None:
         """
-        Add a gate to the ansatz.
+        Add a gate from the instruction map at a specific index in the circuit data.
 
         Parameters
         ----------
-        gate : qiskit.circuit.Instruction
-            The quantum gate to be added.
+        gate_name : str
+            The name of the gate to be added.
+        index : int
+            The index in the circuit data where the gate should be inserted.
         qubits : list[int]
             The qubits on which the gate should act.
         """
-        self.current_ansatz.append(gate, qubits)
-        self._save_state()
+        assert gate_name in INSTRUCTION_MAP, f"Gate {gate_name} is not a recognized standard gate."
+
+        # Resize parameter vector if needed
+        self.param_vector.resize(len(self.param_vector) + 1)
+        new_param = self.param_vector[-1]
+
+        # Create gate instruction
+        instructions_with_params = INSTRUCTION_MAP[gate_name].copy()
+        instructions_with_params.params = [new_param]
+
+        # Insert into circuit data
+        self.current_ansatz.data.insert(index, CircuitInstruction(
+            operation=instructions_with_params,
+            qubits=[self.current_ansatz.qubits[q] for q in qubits],
+            clbits=[]
+        ))
+        
+        # Save state if tracking history
+        if self.track_history:
+            self.history.append(self.current_ansatz.copy())
+            
+    def add_random_gate(self) -> None:
+        """
+        Add a randomly selected gate from the operator pool at a random index.
+        """
+        if not self.current_ansatz.data:
+            index = 0
+        else:
+            index = random.randint(0, len(self.current_ansatz.data))
+        
+        gate_name = random.choice(self.operator_pool)
+        qubits = random.sample(self.current_ansatz.qubits, INSTRUCTION_MAP[gate_name].num_qubits)
+        
+        self.add_gate_at_index(gate_name, index, qubits)
 
     def remove_gate(self, index: int) -> None:
         """
