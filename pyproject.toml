@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adaptive_variational_qc"
+version = "0.1"
+requires-python = ">=3.10"
+authors = [
+    { name = "Diego Alberto Olvera Millán", email = "dolveram@uni-mainz.de" }
+]
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "IPython",
+    "qiskit >= 1.1",
+    "qiskit_experiments >= 0.6.1",
+    "qiskit_algorithms >= 0.3.0"
+]
+
+[tool.setuptools]
+packages = ["adaptive_variational_qc"]
