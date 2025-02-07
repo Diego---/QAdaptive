@@ -50,11 +50,11 @@ class AdaptiveAnsatz:
         
         ansatz_no_barriers = RemoveBarriers()(initial_ansatz)
         # Extract existing parameters
-        existing_params = list(ansatz_no_barriers)
+        existing_params = ansatz_no_barriers.parameters
         num_params = len(existing_params)
 
         # Create a ParameterVector and replace parameters
-        self.param_vector = ParameterVector("theta", num_params)
+        self.param_vector = ParameterVector("θ", num_params)
         param_map = {p: self.param_vector[i] for i, p in enumerate(existing_params)}
         
         self.current_ansatz = ansatz_no_barriers.assign_parameters(param_map)
