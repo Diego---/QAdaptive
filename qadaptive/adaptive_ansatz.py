@@ -1,7 +1,7 @@
 import random
 
 from qiskit import QuantumCircuit
-from qiskit.circuit import ParameterVector, CircuitInstruction
+from qiskit.circuit import ParameterVector, CircuitInstruction, Qubit
 from qiskit.transpiler.passes import RemoveBarriers
 from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 
@@ -37,7 +37,7 @@ class AdaptiveAnsatz:
         """
         
         if operator_pool is None:
-            operator_pool = ['rx', 'ry', 'rz', 'rzz']
+            operator_pool = ['rx', 'ry', 'rz', 'cz']
         else:
             incorrect_gate_names = [gate_name for gate_name in operator_pool 
                                     if gate_name not in INSTRUCTION_MAP]
@@ -60,7 +60,7 @@ class AdaptiveAnsatz:
         self.current_ansatz = ansatz_no_barriers.assign_parameters(param_map)
         self.history: list[QuantumCircuit] = [self.current_ansatz] if track_history else []
         
-    def add_gate_at_index(self, gate_name: str, index: int, qubits: list[int]) -> None:
+    def add_gate_at_index(self, gate_name: str, index: int, qubits: list[int] | list[Qubit]) -> None:
         """
         Add a gate from the instruction map at a specific index in the circuit data.
 
@@ -75,18 +75,25 @@ class AdaptiveAnsatz:
         """
         assert gate_name in INSTRUCTION_MAP, f"Gate {gate_name} is not a recognized standard gate."
 
+        instruction = INSTRUCTION_MAP[gate_name]
+        
         # Resize parameter vector if needed
-        self.param_vector.resize(len(self.param_vector) + 1)
-        new_param = self.param_vector[-1]
+        if len(instruction.params) > 0:
+            self.param_vector.resize(len(self.param_vector) + 1)
+            new_param = self.param_vector[-1]
 
-        # Create gate instruction
-        instructions_with_params = INSTRUCTION_MAP[gate_name].copy()
-        instructions_with_params.params = [new_param]
+            # Create gate instruction
+            instruction_with_params = instruction.copy()
+            instruction_with_params.params = [new_param]
+        else:
+            instruction_with_params = instruction.copy()
 
+        qubit_tuple = tuple(qubits)
+        
         # Insert into circuit data
         self.current_ansatz.data.insert(index, CircuitInstruction(
-            operation=instructions_with_params,
-            qubits=[self.current_ansatz.qubits[q] for q in qubits],
+            operation=instruction_with_params,
+            qubits=qubit_tuple,
             clbits=[]
         ))
         
