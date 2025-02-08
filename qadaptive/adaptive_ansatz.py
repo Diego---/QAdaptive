@@ -62,7 +62,8 @@ class AdaptiveAnsatz:
         
     def add_gate_at_index(self, gate_name: str, index: int, qubits: list[int] | list[Qubit]) -> None:
         """
-        Add a gate from the instruction map at a specific index in the circuit data.
+        Add a gate from the instruction map at a specific index in the circuit data and adjust
+        ParameterVector accordingly.
 
         Parameters
         ----------
@@ -72,13 +73,22 @@ class AdaptiveAnsatz:
             The index in the circuit data where the gate should be inserted.
         qubits : list[int]
             The qubits on which the gate should act.
+        Raises
+        ------
+        IndexError
+            If the index is out of range.
+        AssertionError
+            If the gate being added is not a part of qiskit's standard gates.
         """
+        if index < -1 or index >= len(self.current_ansatz.data) + 1:
+            raise IndexError("Gate index out of range.")
+        
         assert gate_name in INSTRUCTION_MAP, f"Gate {gate_name} is not a recognized standard gate."
 
         instruction = INSTRUCTION_MAP[gate_name]
         
         # Resize parameter vector if needed
-        if len(instruction.params) > 0:
+        if instruction.params:
             self.param_vector.resize(len(self.param_vector) + 1)
             new_param = self.param_vector[-1]
 
@@ -98,8 +108,7 @@ class AdaptiveAnsatz:
         ))
         
         # Save state if tracking history
-        if self.track_history:
-            self.history.append(self.current_ansatz.copy())
+        self._save_state()
             
     def add_random_gate(self) -> None:
         """
