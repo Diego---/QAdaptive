@@ -123,8 +123,52 @@ class AdaptiveAnsatz:
         qubits = random.sample(self.current_ansatz.qubits, INSTRUCTION_MAP[gate_name].num_qubits)
         
         self.add_gate_at_index(gate_name, index, qubits)
+        
+    def remove_gate_by_index(self, indices: int | list[int]) -> None:
+        """
+        Remove one or multiple gates from the ansatz at specified indices and adjust ParameterVector 
+        accordingly.
 
-    def remove_gate(self, index: int) -> None:
+        Parameters
+        ----------
+        indices : int or list[int]
+            The index or indices of the gates in the circuit data to remove.
+
+        Raises
+        ------
+        IndexError
+            If any index is out of range.
+        """
+        if isinstance(indices, int):
+            indices = [indices]
+        
+        if any(idx < 0 or idx >= len(self.current_ansatz.data) for idx in indices):
+            raise IndexError("One or more gate indices are out of range.")
+        
+        # Sort indices in descending order to prevent shifting issues when deleting
+        indices.sort(reverse=True)
+        
+        param_indices_to_remove = []
+        
+        for index in indices:
+            instruction = INSTRUCTION_MAP[self.current_ansatz.data[index].name]
+            params = instruction.params
+            
+            # Remove the gate from the circuit
+            del self.current_ansatz.data[index]
+            
+            # Track parameter indices to remove
+            if params:
+                param_indices_to_remove.append(index)
+        
+        # Remove parameters in descending order to avoid re-indexing issues
+        for _ in sorted(set(param_indices_to_remove), reverse=True):
+            self.param_vector.resize(len(self.param_vector) - 1)
+        
+        # Save state if tracking history
+        self._save_state()
+
+    def remove_random_gate(self, index: int) -> None:
         """
         Remove a gate from the ansatz by index.
 
