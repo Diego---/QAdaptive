@@ -1,4 +1,5 @@
 import numpy as np
+from time import time
 from typing import Callable, SupportsFloat
 
 from qiskit.circuit import Parameter
@@ -77,23 +78,70 @@ class MutableOptimizer:
         If they don't have them, they must be implemented.
         """
         self.ansatz = ansatz
-        self.optimizer = SPSA(optimizer_options) if optimizer is None else optimizer
+        self._current_iteration = 0
+        self.optimizer = SPSA(**optimizer_options) if optimizer is None else optimizer
         self.track_gradients = track_gradients
         self.gradient_history = [] if track_gradients else None
         self.iteration = 0
+        self.callback = callback
+        self.termination_checker = termination_checker
 
-    def step(self):
+    def step(
+        self, 
+        loss_function: Callable[[np.ndarray], float], 
+        x: np.ndarray, 
+        loss_next: Callable[[np.ndarray], float] | None = None
+        ) -> tuple[bool, np.ndarray, float]:
         """
         Perform a single optimization step.
 
         Computes gradients, updates parameters, and modifies the ansatz if needed.
+        
+        Parameters
+        ----------
+        loss_function : Callable[[np.ndarray], float]
+            The cost function to evaluate the ansatz.
+        x : np.ndarray
+            The point at which the step is taken.
+        loss_next : Callable[[np.ndarray], float], optional
+            An optional function to evaluate the objective at the next step.
+            
+        Notes
+        ----------
+        In this method, the optimizer attribute is modified in the following ways:
+        - Iterators are created if they were not already initialized.
+        - Number of cost function evaluations is increased.
+        - The number of iterations is increased.
         """
-        gradients = self.compute_gradients()
+        
+        iteration_start = time()
+        x = np.asarray(x)
+                
+        fx_estimate, gradient_estimate = self.optimizer.compute_loss_and_gradient_estimate(
+            loss_function, x
+            )
+        
         if self.track_gradients:
-            self.gradient_history.append(gradients)
+            self.gradient_history.append(gradient_estimate)
 
-        # Update parameters using the optimizer (e.g., SPSA step)
-        self.update_parameters(gradients)
+        skip, x_next, fx_next = self.optimizer.process_update(
+            gradient_estimate, x, fx_estimate, loss_next, iteration_start, self._current_iteration
+            )
+        
+        current_learn_rate = next(self.optimizer._lr_iterator_copy)
+        if not skip:
+            self.optimizer.last_iteration += 1
+        
+        if self.callback:
+            self.callback(
+                self.optimizer._nextfev, 
+                x_next, 
+                fx_next, 
+                np.linalg.norm(gradient_estimate*current_learn_rate),
+                skip
+                )
+            
+        return skip, x_next, fx_next
 
     def compute_gradients(self) -> np.ndarray:
         """
