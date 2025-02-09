@@ -16,6 +16,25 @@ class MutableOptimizer:
 
     This class tracks gradients, updates parameters, and applies pruning or growth
     strategies based on optimization performance.
+    
+    Attributes
+    ----------
+    ansatz : AdaptiveAnsatz
+        The adaptive ansatz to be optimized.
+    optimizer : Optimizer
+        The classical optimizer object (e.g., SPSA, Adam). Defaults to qae's SPSA if None.
+    track_gradients : bool
+        Indicates whether gradient history is being tracked.
+    gradient_history : list or None
+        Stores the gradients at each iteration if `track_gradients` is True; otherwise `None`.
+    iteration : int
+        The current iteration number in the optimization process.
+    callback : CALLBACK or None
+        A function called at each iteration step with optimization info.
+    termination_checker : TERMINATIONCHECKER or None
+        A function executed at the end of each iteration to determine if optimization should terminate.
+    _current_iteration : int
+        Internal counter for the current iteration (used internally by the optimizer).
     """
 
     def __init__(
