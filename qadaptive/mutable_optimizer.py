@@ -37,7 +37,7 @@ class MutableOptimizer:
         A function called at each iteration step with optimization info.
     termination_checker : TERMINATIONCHECKER or None
         A function executed at the end of each iteration to determine if optimization should terminate.
-    _current_iteration : int
+    _inner_iteration : int
         Internal counter for the current iteration (used internally by the optimizer).
     """
 
@@ -46,7 +46,7 @@ class MutableOptimizer:
         adaptive_ansatz: AdaptiveAnsatz, 
         optimizer: Optimizer | None = None, 
         track_gradients: bool = True,
-        callback: CALLBACK | None = None,
+        callback: CALLBACK | list[CALLBACK] | None = None,
         termination_checker: TERMINATIONCHECKER | None = None,
         **optimizer_options
         ) -> None:
@@ -62,9 +62,9 @@ class MutableOptimizer:
             to None and qae's SPSA implementation is used.
         track_gradients : bool, optional
             Whether to keep track of gradient history (default: True).
-        callback : CALLBACK
-            A callback function passed information in each iteration step. The
-            function signature has to be: (the number of function evaluations, the parameters,
+        callback : CALLBACK, list[CALLBACK], optional
+            A callback function or list of functions passed information in each iteration step. 
+            The function signature has to be: (the number of function evaluations, the parameters,
             the function value, the stepsize, whether the step was accepted).
         termination_checker : TERMINATIONCHECKER
             A callback function executed at the end of each iteration step. The
@@ -82,14 +82,19 @@ class MutableOptimizer:
         """
         self.adaptive_ansatz = adaptive_ansatz
         self.ansatz: QuantumCircuit = adaptive_ansatz.get_current_ansatz()
-        self._current_iteration = 0
         self.optimizer = SPSA(**optimizer_options) if optimizer is None else optimizer
         self.track_gradients = track_gradients
         self.gradient_history = {0 : []} if track_gradients else None
-        self.iteration = 0
-        self.callback = callback
+        # Make callback a list
+        if callback is not None and not isinstance(callback, list):
+            self.callback = [callback]
+        else:
+            self.callback = callback
         self.termination_checker = termination_checker
         self._times_trained = 0
+        # Inner loop and outer loop iteration counters
+        self._inner_iteration = 0
+        self._outer_iteration = 0
 
     def step(
         self, 
@@ -128,7 +133,7 @@ class MutableOptimizer:
             )
 
         skip, x_next, fx_next = self.optimizer.process_update(
-            gradient_estimate, x, fx_estimate, loss_next, iteration_start, self._current_iteration
+            gradient_estimate, x, fx_estimate, loss_next, iteration_start, self._inner_iteration
             )
         
         current_learn_rate = next(self.optimizer._lr_iterator_copy)
@@ -136,13 +141,10 @@ class MutableOptimizer:
             self.optimizer.last_iteration += 1
         
         if self.callback:
-            self.callback(
-                self.optimizer._nextfev, 
-                x_next, 
-                fx_next, 
-                np.linalg.norm(gradient_estimate*current_learn_rate),
-                skip
-                )
+            for callback_function in self.callback:
+            # TODO: Decide callback signature
+                callback_function(
+                    )
             
         return skip, x_next, fx_next, gradient_estimate, fx_estimate
 
@@ -180,7 +182,7 @@ class MutableOptimizer:
         **kwargs
         ) -> OptimizerResult:
         """
-        Train the ansatz for a given number of iterations.
+        Train the ansatz for a given number of iterations. This is part of the inner loop.
 
         Parameters
         ----------
@@ -231,7 +233,7 @@ class MutableOptimizer:
         while k < iterations:
             k += 1
             current_learn_rate = next(self.optimizer._lr_iterator_copy)
-            self.iteration += 1
+            self._inner_iterationiteration += 1
             iteration_start = time()
             # Compute updates for the whole batched dataset when using epochs
             if use_epochs:
@@ -295,6 +297,8 @@ class MutableOptimizer:
                     break
 
         logger.info("SPSA: Finished in %s", time() - start)
+        logger.ingo("Setting inner loop optimization iteration count back to 0.")
+        self._inner_iteration = 0
         
         self._times_trained += 1 
         if self.track_gradients:
