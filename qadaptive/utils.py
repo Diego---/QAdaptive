@@ -1,7 +1,7 @@
 from qiskit.transpiler.basepasses import TransformationPass
 from qiskit.dagcircuit import DAGCircuit, DAGInNode, DAGOpNode
 from qiskit.circuit.library import RZGate, RXGate, RYGate
-from qiskit.circuit import QuantumCircuit, ParameterVector
+from qiskit.circuit import QuantumCircuit, ParameterVector, Parameter
 from qiskit.transpiler import PassManager
 from qiskit.converters import circuit_to_dag, dag_to_circuit
 
@@ -103,7 +103,7 @@ class MergeConsecutiveRotations(TransformationPass):
                         dag.remove_op_node(prev_node)
         return dag
 
-class ReplaceConsecutiveRotationsWithRxRzRx(TransformationPass):
+class ReplaceConsecutiveRotationsWithRxRyRx(TransformationPass):
     """
     A transpiler pass to replace 3 or more consecutive rotations with an RxRzRx sequence.
 
@@ -131,18 +131,36 @@ class ReplaceConsecutiveRotationsWithRxRzRx(TransformationPass):
             nodes_to_remove = []
             parameters_present = []
             for node in list(dag.nodes_on_wire(qubit)):
-                if isinstance(node, DAGOpNode): 
-                    if isinstance(node.op, (RXGate, RYGate, RZGate)):
+                if isinstance(node, DAGOpNode):
+                    # Only aggregate parameterized gates, which assumes that other gates are there for a purpose.
+                    if isinstance(node.op, (RXGate, RYGate, RZGate)) and isinstance(node.op.params[0], Parameter):
                         rotation_sequence.append(node)
                         parameters_present.append(node.op.params[0])
                         nodes_to_remove.append(node)
+                    else:
+                        if len(rotation_sequence) >= 3:
+                            for node in nodes_to_remove[1:]:
+                                dag.remove_op_node(node)
+                            replacement_circ = QuantumCircuit(1)
+                            # Which parameters are used is irrelevant, as they will be changed
+                            replacement_circ.rx(parameters_present[0], 0)
+                            replacement_circ.ry(parameters_present[1], 0)
+                            replacement_circ.rx(parameters_present[2], 0)
+                            remaining_node = nodes_to_remove[0]
+                            replacement_dag = circuit_to_dag(replacement_circ)
+                            dag.substitute_node_with_dag(remaining_node, replacement_dag)
+                        # Reset counters
+                        rotation_sequence = []
+                        nodes_to_remove = []
+                        parameters_present = []
                 else:
+                    # End of the circuit, check for the final rotations
                     if len(rotation_sequence) >= 3:
                         for node in nodes_to_remove[1:]:
                             dag.remove_op_node(node)
                         replacement_circ = QuantumCircuit(1)
                         replacement_circ.rx(parameters_present[0], 0)
-                        replacement_circ.rz(parameters_present[1], 0)
+                        replacement_circ.ry(parameters_present[1], 0)
                         replacement_circ.rx(parameters_present[2], 0)
                         remaining_node = nodes_to_remove[0]
                         replacement_dag = circuit_to_dag(replacement_circ)
@@ -154,7 +172,7 @@ custom_pass_manager = PassManager([
     RemoveUnnecessaryControlledGates(),
     RemoveInitialRZ(),
     MergeConsecutiveRotations(),
-    ReplaceConsecutiveRotationsWithRxRzRx()
+    ReplaceConsecutiveRotationsWithRxRyRx()
 ])    
     
 def change_circuit_parameters(circ: QuantumCircuit) -> QuantumCircuit:
