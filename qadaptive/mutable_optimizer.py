@@ -1,9 +1,9 @@
 import numpy as np
-import logging
+import logging, random
 from time import time
 from typing import Callable, SupportsFloat
 
-from qiskit.circuit import Parameter, QuantumCircuit
+from qiskit.circuit import QuantumCircuit
 from qiskit_algorithms.optimizers.optimizer import Optimizer, OptimizerResult
 
 from qae.optimization.my_spsa import SPSA
@@ -431,20 +431,84 @@ class MutableOptimizer:
         self.adaptive_ansatz.remove_gate_by_index(circ_ind)
         self._update_ansatz()     
 
-    def simplify_unimportant_2qb_gates(self, temperature: float = 0.1) -> None:
+    def simplify_unimportant_2qb_gates(
+        self, cost: Callable, temperature: float = 0.1, alpha: float = 5.0
+        ) -> None:
         """
-        Remove 2qb which, when removed do not affect the cost function too much.
+        Remove 2-qubit gates that do not significantly affect the cost function.
 
         Parameters
         ----------
         temperature : float, optional
-            The "temperature" factor to be used for the decision whether to keep the
-            change based on the proability: 
+            The temperature factor for Metropolis-like acceptance probability:
             
             .. math::
                 p = exp(-\beta \frac{C_{new} - C_{o}}{C_o})
+        alpha : float, optional
+            Scaling factor for gate locking probability:
+
+            .. math::
+                P_{\text{lock}} = 1 - e^{-\alpha \frac{\Delta C}{|C_o|}}
+                
+        Notes
+        ----------
+        - If removing the gate **lowers or keeps the cost the same**, it is removed.
+        - If the cost increases, the removal is accepted with probability `p`.
+        - If the removal is **rejected**, the gate may be locked to prevent further attempts.
         """
-        logger.info(f"Simplified ansatz by removing 2 qubit gate {2}.")
+        
+        if not self._2qg_positions:
+            return  # No 2-qubit gates to remove
+        
+        # Pick a random 2-qubit gate that is NOT locked
+        removable_indices = [i - 1 for i, _ in enumerate(self._2qg_positions, start=1) 
+                             if not self.locked_gates.get(i, False)]
+        if not removable_indices:
+            return  # No gates left to consider
+        
+        gate_index = random.choice(removable_indices)
+        gate_to_remove = self._2qg_positions[gate_index]  # Convert index to position in ansatz.data
+        
+        # Create a trial ansatz with the gate removed
+        trial_ansatz = self.ansatz.copy()
+        trial_ansatz.data.pop(gate_to_remove)
+        
+        # Compute the new cost
+        trial_cost = cost(self._last_params, trial_ansatz)
+        current_cost = self._last_cost
+        
+        # Compute cost difference
+        delta_C = trial_cost - current_cost
+        
+        # If the cost decreases or stays the same, accept removal
+        if delta_C <= 0:
+            self.adaptive_ansatz.update_ansatz(trial_ansatz)  # Update ansatz
+            self._update_ansatz()
+            self._last_cost = trial_cost
+            # Update locked_gates: shift remaining indices down
+            self.locked_gates = {i: self.locked_gates[i + 1] for i in range(gate_index, len(self.locked_gates))}
+            self.locked_gates.pop(len(self.locked_gates), None)  # Remove last entry
+            return
+        
+        # Compute acceptance probability
+        beta = 1 / temperature if temperature > 0 else float("inf")  # Avoid division by zero
+        acceptance_prob = np.exp(-beta * delta_C / abs(current_cost))
+        
+        # Accept the removal with probability p
+        if np.random.rand() < acceptance_prob:
+            self.adaptive_ansatz.update_ansatz(trial_ansatz)  # Update ansatz
+            self._update_ansatz()
+            self._last_cost = trial_cost
+            # Update locked_gates: shift remaining indices down
+            self.locked_gates = {i: self.locked_gates[i + 1] for i in range(gate_index, len(self.locked_gates))}
+            self.locked_gates.pop(len(self.locked_gates), None)  # Remove last entry
+        else:
+            # Reject removal: Consider locking the gate with some probability
+            lock_prob = 1 - np.exp(-alpha * delta_C / abs(current_cost))
+            if np.random.rand() < lock_prob:
+                self.locked_gates[gate_index] = True
+        
+        logger.info(f"Simplified ansatz by removing 2 qubit gate at index {gate_to_remove}.")
         self._update_ansatz()
         
     def simplify_transpiler_passes(self) -> QuantumCircuit:
