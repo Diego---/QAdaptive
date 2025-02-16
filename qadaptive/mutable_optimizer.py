@@ -8,6 +8,7 @@ from qiskit_algorithms.optimizers.optimizer import Optimizer, OptimizerResult
 
 from qae.optimization.my_spsa import SPSA
 from qadaptive.adaptive_ansatz import AdaptiveAnsatz
+from qadaptive.utils import custom_pass_manager, change_circuit_parameters
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
@@ -316,9 +317,82 @@ class MutableOptimizer:
 
         return result
 
-    def prune_and_grow(self):
+    def insert_random(self) -> None:
         """
-        Apply pruning and growing logic based on gradient analysis.
+        Insert a new gate into the adaptive ansatz at the current step.
+
+        Parameters
+        ----------
+        gate : str
+            The type of gate to insert (e.g., 'rx', 'ry', 'cz').
+        qubits : list[int]
+            The qubits on which to apply the gate.
+        params : list[float] or None
+            Parameters for the gate (if applicable). Default is None.
         """
-        # Placeholder for pruning & growth decision logic
-        pass
+        gate_name, qubits, index = self.adaptive_ansatz.add_random_gate()
+        logger.info(f"Inserted {gate_name} gate on qubits {qubits} at position {index}.")
+        
+    def insert_at(
+        self, gate: str, qubits: list[int], circ_ind: int
+        ) -> None:
+        """
+        Insert a new gate into the adaptive ansatz at the current step.
+
+        Parameters
+        ----------
+        gate : str
+            The type of gate to insert (e.g., 'rx', 'ry', 'cz').
+        qubits : list[int]
+            The qubits on which to apply the gate.
+        circ_ind : int
+            Index at which the operation should be added. If index i is chosen,
+            the operation is places in position i.
+        """
+        assert gate in self.adaptive_ansatz.operator_pool, (
+            f"Gate {gate} is not part of the available operator pool: {self.adaptive_ansatz.operator_pool}."
+        )
+        self.adaptive_ansatz.add_gate_at_index(gate, circ_ind, qubits)
+        logger.info(f"Inserted {gate} gate on qubits {qubits} at position {circ_ind}.")
+        
+
+    def simplify(self, threshold: float = 1e-3) -> None:
+        """
+        Remove gates with parameters close to zero to simplify the ansatz.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            The threshold below which parameters are considered negligible (default: 1e-3).
+        """
+        new_circuit = QuantumCircuit(*self.ansatz.qregs)
+        
+        for instr, qargs, cargs in self.ansatz.data:
+            if instr.params and all(abs(p) < threshold for p in instr.params):
+                logger.info(f"Removing gate {instr.name} on qubits {qargs} due to low parameter value.")
+                continue  # Skip adding this gate
+            new_circuit.append(instr, qargs, cargs)
+        
+        self.ansatz = new_circuit
+        self.adaptive_ansatz.update_ansatz(self.ansatz)
+        
+        logger.info("Simplified ansatz by removing negligible gates.")
+        
+    def simplify_transpiler_passes(self) -> QuantumCircuit:
+        """
+        Remove conditional operations and Rz rotations at the start of the circuit and joing
+        together succesive rotations around the same axis.
+
+        Returns
+        ----------
+        QuantumCircuit
+            The resulting circuit.
+        """
+        new_circuit, new_vector = change_circuit_parameters(
+            custom_pass_manager.run(self.adaptive_ansatz.current_ansatz)
+            )
+        logger.info("Simplified ansatz by removing doing compilation passes.")
+        
+        self.adaptive_ansatz.update_ansatz(new_circuit)
+        logger.info(f"Updated parameter vector from {self.adaptive_ansatz.param_vector} to {new_vector}.")
+        self.adaptive_ansatz.update_parameter_vector(new_vector)
