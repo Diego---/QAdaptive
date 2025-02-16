@@ -269,7 +269,7 @@ class MutableOptimizer:
             The indices in self.ansatz.data where the 2 qubit gates are.
         """
         indices = []
-        for i, gate in enumerate(self.ansatz.data):
+        for i, gate in enumerate(self.adaptive_ansatz.current_ansatz.data):
             if len(gate.qubits) == 2:
                 indices.append(i)
         
@@ -492,11 +492,12 @@ class MutableOptimizer:
         )
         self.adaptive_ansatz.add_gate_at_index(gate, circ_ind, qubits)
         logger.info(f"Inserted {gate} gate on qubits {qubits} at position {circ_ind}.")
-        self._update_ansatz()
         logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qg_positions}.")
         # If a 2-qubit gate is added, update _2qg_positions and locked_gates
         if len(qubits) == 2:
             self._update_locked_gates_on_insert(circ_ind)
+            
+        self._update_ansatz()
 
     def remove_at(
         self, circ_ind: int
@@ -515,7 +516,36 @@ class MutableOptimizer:
         self.adaptive_ansatz.remove_gate_by_index(circ_ind)
         if was_2qbg:
             self._update_locked_gates_on_removal(circ_ind)
-        self._update_ansatz()   
+        self._update_ansatz()
+        
+    def simplify_transpiler_passes(self) -> QuantumCircuit:
+        """
+        Remove conditional operations and Rz rotations at the start of the circuit and joing
+        together succesive rotations around the same axis.
+
+        Returns
+        ----------
+        QuantumCircuit
+            The resulting circuit.
+        """
+        old_num_2qbg = len(self._get_two_qubit_gate_indices())
+        new_circuit, new_vector = change_circuit_parameters(
+            custom_pass_manager.run(self.adaptive_ansatz.current_ansatz)
+            )
+        logger.info("Simplified ansatz by doing compilation passes.")
+        
+        self.adaptive_ansatz.update_ansatz(new_circuit)
+        logger.info(f"Updated parameter vector from {self.adaptive_ansatz.param_vector} to {new_vector}.")
+        self.adaptive_ansatz.update_parameter_vector(new_vector)
+        
+        self._update_ansatz()
+        
+        new_num_2qbg = len(self._get_two_qubit_gate_indices())
+        # If 2 qubit gates were removed, reset locked status
+        logger.info(f"{old_num_2qbg - new_num_2qbg} two-qubit gates were removed.")
+        if old_num_2qbg - new_num_2qbg != 0:
+            logger.info("Reseting locked status of 2 qubit gates.")
+            self.locked_gates = {i: False for i in range(new_num_2qbg)}
 
     def simplify_unimportant_2qb_gates(
         self, cost: Callable, temperature: float = 0.1, alpha: float = 0.1, accept_tol: float = 0.2
@@ -600,24 +630,4 @@ class MutableOptimizer:
             if np.random.rand() < lock_prob:
                 self.locked_gates[gate_index] = True
                 logger.info(f"Locked gate {gate_index}.")
-                
-    def simplify_transpiler_passes(self) -> QuantumCircuit:
-        """
-        Remove conditional operations and Rz rotations at the start of the circuit and joing
-        together succesive rotations around the same axis.
 
-        Returns
-        ----------
-        QuantumCircuit
-            The resulting circuit.
-        """
-        new_circuit, new_vector = change_circuit_parameters(
-            custom_pass_manager.run(self.adaptive_ansatz.current_ansatz)
-            )
-        logger.info("Simplified ansatz by removing doing compilation passes.")
-        
-        self.adaptive_ansatz.update_ansatz(new_circuit)
-        logger.info(f"Updated parameter vector from {self.adaptive_ansatz.param_vector} to {new_vector}.")
-        self.adaptive_ansatz.update_parameter_vector(new_vector)
-        
-        self._update_ansatz()
