@@ -1,9 +1,11 @@
-import random
+import random, logging
 
 from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector, CircuitInstruction, Qubit
 from qiskit.transpiler.passes import RemoveBarriers
 from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
+
+logger = logging.getLogger(__name__)
 
 INSTRUCTION_MAP = get_standard_gate_name_mapping()
 
@@ -110,7 +112,7 @@ class AdaptiveAnsatz:
         # Save state if tracking history
         self._save_state()
             
-    def add_random_gate(self) -> None:
+    def add_random_gate(self) -> tuple[str, ]:
         """
         Add a randomly selected gate from the operator pool at a random index.
         """
@@ -123,6 +125,8 @@ class AdaptiveAnsatz:
         qubits = random.sample(self.current_ansatz.qubits, INSTRUCTION_MAP[gate_name].num_qubits)
         
         self.add_gate_at_index(gate_name, index, qubits)
+        
+        return gate_name, qubits, index
         
     def remove_gate_by_index(self, indices: int | list[int]) -> None:
         """
@@ -214,3 +218,26 @@ class AdaptiveAnsatz:
             The current version of the quantum circuit.
         """
         return self.current_ansatz
+    
+    def update_ansatz(self, new_ansatz: QuantumCircuit) -> None:
+        """
+        Update the current ansatz.
+        
+        Parameters
+        ----------
+        new_ansatz : QuantumCircuit
+            The new ansatz.
+        """
+        
+        self.current_ansatz = new_ansatz.copy()
+    
+    def update_parameter_vector(self, new_vector: ParameterVector) -> None:
+        """
+        Update the parameter vector.
+
+        Parameters
+        ----------
+        new_vector : ParameterVector
+            The new vector to be used.
+        """
+        self.param_vector = new_vector
