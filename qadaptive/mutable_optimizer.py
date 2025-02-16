@@ -96,6 +96,9 @@ class MutableOptimizer:
         # Inner loop and outer loop iteration counters
         self._inner_iteration = 0
         self._outer_iteration = 0
+        # Last cost function and last parameters evaluated
+        self._last_cost = 0
+        self._last_params = []
 
     def step(
         self, 
@@ -172,6 +175,10 @@ class MutableOptimizer:
         """
         # Placeholder: Apply optimizer update
         pass
+    
+    def _update_ansatz(self) -> None:
+        """Update the ansatz attribute."""
+        self.ansatz = self.adaptive_ansatz.get_current_ansatz()
 
     def train_one_time(
         self, 
@@ -332,6 +339,7 @@ class MutableOptimizer:
         """
         gate_name, qubits, index = self.adaptive_ansatz.add_random_gate()
         logger.info(f"Inserted {gate_name} gate on qubits {qubits} at position {index}.")
+        self._update_ansatz()
         
     def insert_at(
         self, gate: str, qubits: list[int], circ_ind: int
@@ -354,29 +362,37 @@ class MutableOptimizer:
         )
         self.adaptive_ansatz.add_gate_at_index(gate, circ_ind, qubits)
         logger.info(f"Inserted {gate} gate on qubits {qubits} at position {circ_ind}.")
+        self._update_ansatz()
         
-
-    def simplify(self, threshold: float = 1e-3) -> None:
+    def remove_at(
+        self, circ_ind: int
+        ) -> None:
         """
-        Remove gates with parameters close to zero to simplify the ansatz.
+        Remove gate at a given index in the adaptive ansatz.
 
         Parameters
         ----------
-        threshold : float, optional
-            The threshold below which parameters are considered negligible (default: 1e-3).
+        circ_ind : int
+            Position from where to remove the gate.
         """
-        new_circuit = QuantumCircuit(*self.ansatz.qregs)
-        
-        for instr, qargs, cargs in self.ansatz.data:
-            if instr.params and all(abs(p) < threshold for p in instr.params):
-                logger.info(f"Removing gate {instr.name} on qubits {qargs} due to low parameter value.")
-                continue  # Skip adding this gate
-            new_circuit.append(instr, qargs, cargs)
-        
-        self.ansatz = new_circuit
-        self.adaptive_ansatz.update_ansatz(self.ansatz)
-        
-        logger.info("Simplified ansatz by removing negligible gates.")
+        self.adaptive_ansatz.remove_gate_by_index(circ_ind)
+        self._update_ansatz()     
+
+    def simplify_unimportant_2qb_gates(self, temperature: float = 0.1) -> None:
+        """
+        Remove 2qb which, when removed do not affect the cost function too much.
+
+        Parameters
+        ----------
+        temperature : float, optional
+            The "temperature" factor to be used for the decision whether to keep the
+            change based on the proability: 
+            
+            .. math::
+                p = exp(-\beta \frac{C_{new} - C_{o}}{C_o})
+        """
+        logger.info(f"Simplified ansatz by removing 2 qubit gate {2}.")
+        self._update_ansatz()
         
     def simplify_transpiler_passes(self) -> QuantumCircuit:
         """
@@ -396,3 +412,5 @@ class MutableOptimizer:
         self.adaptive_ansatz.update_ansatz(new_circuit)
         logger.info(f"Updated parameter vector from {self.adaptive_ansatz.param_vector} to {new_vector}.")
         self.adaptive_ansatz.update_parameter_vector(new_vector)
+        
+        self._update_ansatz()
