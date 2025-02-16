@@ -99,6 +99,12 @@ class MutableOptimizer:
         # Last cost function and last parameters evaluated
         self._last_cost = 0
         self._last_params = []
+        # Two qubit gate positions
+        self._2qg_positions = self._get_two_qubit_gate_indices()
+        # Some 2 qubit gates will be important and thus get locked
+        # Since the ansatz will be constantly changing, this is tracked by looking at the
+        # n'th two qubit gate. No gate is locked by default.
+        self.locked_gates = {i : False for i in range(len(self._2qg_positions))}
 
     def step(
         self, 
@@ -179,6 +185,53 @@ class MutableOptimizer:
     def _update_ansatz(self) -> None:
         """Update the ansatz attribute."""
         self.ansatz = self.adaptive_ansatz.get_current_ansatz()
+        self._2qg_positions = self._get_two_qubit_gate_indices()
+        
+    def _get_two_qubit_gate_indices(self) -> list[int]:
+        """
+        Find the locations of the 2 qubit gates.
+
+        Returns
+        -------
+        list[int]
+            The indices in self.ansatz.data where the 2 qubit gates are.
+        """
+        indices = []
+        for i, gate in enumerate(self.ansatz.data):
+            if len(gate.qubits) == 2:
+                indices.append(i)
+        
+        return indices
+    
+    def lock_gates(self, gate_position: dict[int, bool]) -> None:
+        """
+        Set the locked state of 2-qubit gates based on the specified positions.
+
+        This method updates the locked state of 2-qubit gates according to the given
+        dictionary. Each key in the dictionary represents the position of a gate,
+        and the corresponding value indicates whether the gate should be locked (True) or 
+        not locked (False).
+
+        Parameters
+        ----------
+        gate_position : dict[int, bool]
+            A dictionary where the keys are the positions of the 2-qubit gates, and the values
+            indicate whether each gate should be locked (True) or not locked (False).
+
+        Raises
+        ------
+        KeyError
+            If any key in `gate_position` is not found in `self.locked_gates`.
+
+        Example
+        -------
+        >>> gate_position = {1: True, 2: False, 3: True}
+        >>> obj.lock_gates(gate_position)
+        """
+        for pos in gate_position.keys():
+            if pos not in self.locked_gates:
+                raise KeyError(f"Gate position {pos} not found in locked_gates.")
+            self.locked_gates[pos] = gate_position[pos]
 
     def train_one_time(
         self, 
