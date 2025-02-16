@@ -187,6 +187,78 @@ class MutableOptimizer:
         self.ansatz = self.adaptive_ansatz.get_current_ansatz()
         self._2qg_positions = self._get_two_qubit_gate_indices()
         
+    def _update_locked_gates_on_insert(self, circ_ind: int) -> None:
+        """
+        Update `locked_gates` when a new 2-qubit gate is inserted.
+
+        This method:
+        - Finds the correct position in `_2qg_positions`
+        - Updates the `locked_gates` dictionary by shifting indices
+        - Initializes the new gate as "not locked" (False)
+
+        Parameters
+        ----------
+        circ_ind : int
+            The circuit index at which the new two-qubit gate is inserted.
+        """
+        # Determine the new position index in _2qg_positions
+        insert_pos = 0
+        while insert_pos < len(self._2qg_positions) and self._2qg_positions[insert_pos] < circ_ind:
+            insert_pos += 1
+
+        # Insert the new gate position
+        self._2qg_positions.insert(insert_pos, circ_ind)
+
+        # Update the locked_gates dictionary: shift existing keys and insert new entry
+        new_locked_gates = {}
+        for i, old_status in self.locked_gates.items():
+            if i < insert_pos:
+                new_locked_gates[i] = old_status  # Keep previous mapping
+            else:
+                new_locked_gates[i + 1] = old_status  # Shift indices forward
+
+        # Insert the new gate as "not locked" by default
+        new_locked_gates[insert_pos] = False
+        self.locked_gates = new_locked_gates
+
+        logger.info(f"New locked status dictionary is: {self.locked_gates}.")
+
+    def _update_locked_gates_on_removal(self, circ_ind: int) -> None:
+        """
+        Update `locked_gates` when a two-qubit gate is removed.
+
+        This method:
+        - Finds the correct position in `_2qg_positions`
+        - Removes the corresponding entry from `_2qg_positions`
+        - Updates `locked_gates` by shifting indices
+
+        Parameters
+        ----------
+        circ_ind : int
+            The circuit index of the removed two-qubit gate.
+        """
+        # Find the position index in _2qg_positions
+        if circ_ind not in self._2qg_positions:
+            logger.warning(f"Attempted to remove gate at {circ_ind}, but not found in _2qg_positions.")
+            return
+        
+        remove_pos = self._2qg_positions.index(circ_ind)
+        
+        # Remove the position from _2qg_positions
+        self._2qg_positions.pop(remove_pos)
+
+        # Update the locked_gates dictionary: shift existing keys down
+        new_locked_gates = {}
+        for i, old_status in self.locked_gates.items():
+            if i < remove_pos:
+                new_locked_gates[i] = old_status  # Keep previous mapping
+            elif i > remove_pos:
+                new_locked_gates[i - 1] = old_status  # Shift indices backward
+
+        self.locked_gates = new_locked_gates
+
+        logger.info(f"Updated locked gates after removal: {self.locked_gates}.")
+        
     def _get_two_qubit_gate_indices(self) -> list[int]:
         """
         Find the locations of the 2 qubit gates.
@@ -294,7 +366,7 @@ class MutableOptimizer:
         while k < iterations:
             k += 1
             current_learn_rate = next(self.optimizer._lr_iterator_copy)
-            self._inner_iterationiteration += 1
+            self._inner_iteration += 1
             iteration_start = time()
             # Compute updates for the whole batched dataset when using epochs
             if use_epochs:
@@ -358,7 +430,7 @@ class MutableOptimizer:
                     break
 
         logger.info("SPSA: Finished in %s", time() - start)
-        logger.ingo("Setting inner loop optimization iteration count back to 0.")
+        logger.info("Setting inner loop optimization iteration count back to 0.")
         self._inner_iteration = 0
         
         self._times_trained += 1 
@@ -374,6 +446,9 @@ class MutableOptimizer:
         result.fun = loss_function(x) if loss_next is None else loss_next(x)
         result.nfev = self.optimizer._nfev
         result.nit = k
+        
+        self._last_cost = result.fun
+        self._last_params = x
 
         return result
 
@@ -393,7 +468,9 @@ class MutableOptimizer:
         gate_name, qubits, index = self.adaptive_ansatz.add_random_gate()
         logger.info(f"Inserted {gate_name} gate on qubits {qubits} at position {index}.")
         self._update_ansatz()
-        
+        if len(qubits) == 2:
+            self._update_locked_gates_on_insert(index)
+                    
     def insert_at(
         self, gate: str, qubits: list[int], circ_ind: int
         ) -> None:
@@ -416,7 +493,11 @@ class MutableOptimizer:
         self.adaptive_ansatz.add_gate_at_index(gate, circ_ind, qubits)
         logger.info(f"Inserted {gate} gate on qubits {qubits} at position {circ_ind}.")
         self._update_ansatz()
-        
+        logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qg_positions}.")
+        # If a 2-qubit gate is added, update _2qg_positions and locked_gates
+        if len(qubits) == 2:
+            self._update_locked_gates_on_insert(circ_ind)
+
     def remove_at(
         self, circ_ind: int
         ) -> None:
@@ -428,11 +509,16 @@ class MutableOptimizer:
         circ_ind : int
             Position from where to remove the gate.
         """
+        was_2qbg = False
+        if len(self.ansatz.data[circ_ind].parameters) == 2:
+            was_2qbg = True
         self.adaptive_ansatz.remove_gate_by_index(circ_ind)
-        self._update_ansatz()     
+        if was_2qbg:
+            self._update_locked_gates_on_removal(circ_ind)
+        self._update_ansatz()   
 
     def simplify_unimportant_2qb_gates(
-        self, cost: Callable, temperature: float = 0.1, alpha: float = 5.0
+        self, cost: Callable, temperature: float = 0.1, alpha: float = 0.1, accept_tol: float = 0.2
         ) -> None:
         """
         Remove 2-qubit gates that do not significantly affect the cost function.
@@ -449,6 +535,8 @@ class MutableOptimizer:
 
             .. math::
                 P_{\text{lock}} = 1 - e^{-\alpha \frac{\Delta C}{|C_o|}}
+        accept_tol : float, optional
+            Tolerance for accepting the change. Defaults to 0.2.
                 
         Notes
         ----------
@@ -456,6 +544,7 @@ class MutableOptimizer:
         - If the cost increases, the removal is accepted with probability `p`.
         - If the removal is **rejected**, the gate may be locked to prevent further attempts.
         """
+        assert len(self._last_params)>0, "Ansatz has not been trained yet. Train to set last parameters."
         
         if not self._2qg_positions:
             return  # No 2-qubit gates to remove
@@ -478,39 +567,40 @@ class MutableOptimizer:
         current_cost = self._last_cost
         
         # Compute cost difference
+        logger.info(f"Last cost function was: {current_cost}. Trial cost function is: {trial_cost}.")
         delta_C = trial_cost - current_cost
+        logger.info(f"Delta was determined to be: {delta_C}.")
         
         # If the cost decreases or stays the same, accept removal
-        if delta_C <= 0:
+        if delta_C <= -1*accept_tol:
+            logger.info("Change was accepted since cost went down.")
             self.adaptive_ansatz.update_ansatz(trial_ansatz)  # Update ansatz
+            self._update_locked_gates_on_removal(gate_to_remove)
             self._update_ansatz()
             self._last_cost = trial_cost
-            # Update locked_gates: shift remaining indices down
-            self.locked_gates = {i: self.locked_gates[i + 1] for i in range(gate_index, len(self.locked_gates))}
-            self.locked_gates.pop(len(self.locked_gates), None)  # Remove last entry
+            
             return
         
         # Compute acceptance probability
         beta = 1 / temperature if temperature > 0 else float("inf")  # Avoid division by zero
         acceptance_prob = np.exp(-beta * delta_C / abs(current_cost))
+        logger.info(f"Acceptance probability for gate removal is: {acceptance_prob}.")
         
         # Accept the removal with probability p
         if np.random.rand() < acceptance_prob:
             self.adaptive_ansatz.update_ansatz(trial_ansatz)  # Update ansatz
+            self._update_locked_gates_on_removal(gate_to_remove)
             self._update_ansatz()
             self._last_cost = trial_cost
-            # Update locked_gates: shift remaining indices down
-            self.locked_gates = {i: self.locked_gates[i + 1] for i in range(gate_index, len(self.locked_gates))}
-            self.locked_gates.pop(len(self.locked_gates), None)  # Remove last entry
+            logger.info(f"Simplified ansatz by removing 2 qubit gate at index {gate_to_remove}.")
         else:
             # Reject removal: Consider locking the gate with some probability
             lock_prob = 1 - np.exp(-alpha * delta_C / abs(current_cost))
+            logger.info(f"Removal rejected. Probability of locking gate is: {lock_prob}.")
             if np.random.rand() < lock_prob:
                 self.locked_gates[gate_index] = True
-        
-        logger.info(f"Simplified ansatz by removing 2 qubit gate at index {gate_to_remove}.")
-        self._update_ansatz()
-        
+                logger.info(f"Locked gate {gate_index}.")
+                
     def simplify_transpiler_passes(self) -> QuantumCircuit:
         """
         Remove conditional operations and Rz rotations at the start of the circuit and joing
