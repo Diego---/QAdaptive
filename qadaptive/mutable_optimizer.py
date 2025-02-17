@@ -619,10 +619,10 @@ class MutableOptimizer:
         # Accept the removal with probability p
         if np.random.rand() < acceptance_prob:
             self.adaptive_ansatz.update_ansatz(trial_ansatz)  # Update ansatz
+            logger.info(f"Simplified ansatz by removing 2 qubit gate at index {gate_to_remove}.")
             self._update_locked_gates_on_removal(gate_to_remove)
             self._update_ansatz()
             self._last_cost = trial_cost
-            logger.info(f"Simplified ansatz by removing 2 qubit gate at index {gate_to_remove}.")
         else:
             # Reject removal: Consider locking the gate with some probability
             lock_prob = 1 - np.exp(-alpha * delta_C / abs(current_cost))
@@ -630,4 +630,3 @@ class MutableOptimizer:
             if np.random.rand() < lock_prob:
                 self.locked_gates[gate_index] = True
                 logger.info(f"Locked gate {gate_index}.")
-
