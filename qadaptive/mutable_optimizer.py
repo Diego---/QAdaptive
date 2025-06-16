@@ -15,9 +15,9 @@ TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], boo
 
 logger = logging.getLogger(__name__)
 
-class MutableOptimizer:
+class MutableAnsatzExperiment:
     """
-    An optimizer that dynamically modifies a quantum ansatz while training.
+    An experiment in which an ansatz is dynamically modified while training.
 
     This class tracks gradients, updates parameters, and applies pruning or growth
     strategies based on optimization performance.
