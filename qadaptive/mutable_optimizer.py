@@ -3,7 +3,7 @@ import logging, random
 from time import time
 from typing import Callable, SupportsFloat
 
-from qiskit.circuit import QuantumCircuit
+from qiskit.circuit import QuantumCircuit, Parameter
 from qiskit_algorithms.optimizers.optimizer import Optimizer, OptimizerResult
 
 from qae.optimization.my_spsa import SPSA
@@ -135,11 +135,14 @@ class MutableAnsatzExperiment:
         - The number of iterations is increased.
         """
         
+        current_ansatz = self.adaptive_ansatz.current_ansatz
+        new_kwargs = {**kwargs, 'ansatz': current_ansatz}
+        
         iteration_start = time()
         x = np.asarray(x)
                 
         fx_estimate, gradient_estimate = self.optimizer.compute_loss_and_gradient_estimate(
-            loss_function, x, **kwargs
+            loss_function, x, **new_kwargs
             )
 
         skip, x_next, fx_next = self.optimizer.process_update(
@@ -329,13 +332,16 @@ class MutableAnsatzExperiment:
         OptimizerResult
             The result of the optimization.
         """
+        
+        current_ansatz = self.adaptive_ansatz.get_current_ansatz()
+        
         logger.info(f"Started minimization of loss funcion. Repetitions: {self._times_trained}.")
         
         if self.optimizer.blocking:
             raise NotImplementedError("Training with blocking is not yet implemented.")
         
         if initial_point is None:
-            initial_point = np.random.normal(loc=0, scale=1, size=len(self.ansatz.parameters))
+            initial_point = [random.choice([-1, 1]) for _ in self.ansatz.num_parameters]
         x = np.asarray(initial_point)
         
         # If the iterators have not been set, set them now.
@@ -379,7 +385,7 @@ class MutableAnsatzExperiment:
                 for i, indices in enumerate(batch_indices):
                     logger.info(f"Evaluating batch {i+1} out of {len(batch_indices)}.")
                     skip, x_next, fx_next, gradient_estimate, fx_estimate = self.step(
-                        loss_function, x, loss_next, used_circs_indices = indices
+                        loss_function, x, loss_next, used_circs_indices=indices
                         )
                     if skip:
                         continue
@@ -389,7 +395,7 @@ class MutableAnsatzExperiment:
             # Compute updates iteration by iteration
             else:
                 skip, x_next, fx_next, gradient_estimate, fx_estimate = self.step(
-                    loss_function, x, loss_next, num_circs_per_group = ncpg
+                    loss_function, x, loss_next, num_circs_per_group=ncpg
                     )
                 if skip:
                     continue
@@ -403,11 +409,11 @@ class MutableAnsatzExperiment:
                 if loss_next is  None:
                     logger.info("Calculating next step for the callback, which takes another function evaluation.")
                     self.optimizer._nfev += 1
-                    fx_next = loss_function(x_next)
+                    fx_next = loss_function(x_next, ansatz=current_ansatz)
                 else:
                     logger.info("Calculating next step for the callback with custom function.")
                     self.optimizer._nextfev += 1
-                    fx_next = loss_next(x_next)
+                    fx_next = loss_next(x_next, ansatz=current_ansatz)
                     
                 self.optimizer.callback(
                     self.optimizer._nfev,  # number of function evals
@@ -443,7 +449,7 @@ class MutableAnsatzExperiment:
             logger.info("Calculating cost funtion value for final parameters.")
         else:
             logger.info("Calculating custom cost funtion value for final parameters.")
-        result.fun = loss_function(x) if loss_next is None else loss_next(x)
+        result.fun = loss_function(x, current_ansatz) if loss_next is None else loss_next(x, current_ansatz)
         result.nfev = self.optimizer._nfev
         result.nit = k
         
@@ -455,15 +461,6 @@ class MutableAnsatzExperiment:
     def insert_random(self) -> None:
         """
         Insert a new gate into the adaptive ansatz at the current step.
-
-        Parameters
-        ----------
-        gate : str
-            The type of gate to insert (e.g., 'rx', 'ry', 'cz').
-        qubits : list[int]
-            The qubits on which to apply the gate.
-        params : list[float] or None
-            Parameters for the gate (if applicable). Default is None.
         """
         gate_name, qubits, index = self.adaptive_ansatz.add_random_gate()
         logger.info(f"Inserted {gate_name} gate on qubits {qubits} at position {index}.")
@@ -548,7 +545,7 @@ class MutableAnsatzExperiment:
             self.locked_gates = {i: False for i in range(new_num_2qbg)}
 
     def simplify_unimportant_2qb_gates(
-        self, cost: Callable, temperature: float = 0.1, alpha: float = 0.1, accept_tol: float = 0.2
+        self, cost: Callable, temperature: float = 0.08, alpha: float = 0.1, accept_tol: float = 0.2
         ) -> None:
         """
         Remove 2-qubit gates that do not significantly affect the cost function.
@@ -630,3 +627,6 @@ class MutableAnsatzExperiment:
             if np.random.rand() < lock_prob:
                 self.locked_gates[gate_index] = True
                 logger.info(f"Locked gate {gate_index}.")
+
+    def get_current_parameters(self) -> list[Parameter]:
+        return self.adaptive_ansatz.get_current_ansatz().parameters        
