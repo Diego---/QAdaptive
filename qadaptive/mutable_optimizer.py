@@ -105,6 +105,10 @@ class MutableAnsatzExperiment:
         # Since the ansatz will be constantly changing, this is tracked by looking at the
         # n'th two qubit gate. No gate is locked by default.
         self.locked_gates = {i : False for i in range(len(self._2qg_positions))}
+        
+    def refresh_optimizer(self) -> None:
+        # TODO: refresh optimizer for next optimization
+        fresh_optimizer = self.optimizer
 
     def step(
         self, 
