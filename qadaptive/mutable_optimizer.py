@@ -8,7 +8,7 @@ from qiskit_algorithms.optimizers.optimizer import Optimizer, OptimizerResult
 
 from qae.optimization.my_spsa import SPSA
 from qadaptive.adaptive_ansatz import AdaptiveAnsatz
-from qadaptive.utils import custom_pass_manager, change_circuit_parameters
+from qadaptive.utils import custom_pass_manager
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
@@ -526,14 +526,9 @@ class MutableAnsatzExperiment:
             The resulting circuit.
         """
         old_num_2qbg = len(self._get_two_qubit_gate_indices())
-        new_circuit, new_vector = change_circuit_parameters(
-            custom_pass_manager.run(self.adaptive_ansatz.current_ansatz)
-            )
-        logger.info("Simplified ansatz by doing compilation passes.")
         
-        self.adaptive_ansatz.update_ansatz(new_circuit)
+        logger.info("Simplified ansatz by doing compilation passes.")
         logger.info(f"Updated parameter vector from {self.adaptive_ansatz.param_vector} to {new_vector}.")
-        self.adaptive_ansatz.update_parameter_vector(new_vector)
         
         self._update_ansatz()
         
