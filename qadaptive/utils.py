@@ -173,11 +173,4 @@ custom_pass_manager = PassManager([
     RemoveInitialRZ(),
     MergeConsecutiveRotations(),
     ReplaceConsecutiveRotationsWithRxRyRx()
-])    
-    
-def change_circuit_parameters(circ: QuantumCircuit) -> QuantumCircuit:
-    num_params = circ.num_parameters
-    new_vector = ParameterVector("θ", num_params)
-    param_dict = {param: new_vector[i] for i, param in enumerate(circ.parameters)}
-    
-    return circ.assign_parameters(param_dict, inplace=False), new_vector
+])
