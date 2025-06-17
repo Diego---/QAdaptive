@@ -4,7 +4,7 @@ from qiskit.circuit import QuantumCircuit, ParameterVector
 
 from qae.optimization.my_spsa import SPSA
 from qadaptive.adaptive_ansatz import AdaptiveAnsatz
-from qadaptive.mutable_optimizer import MutableOptimizer
+from qadaptive.mutable_ansatz_experiment import MutableAnsatzExperiment
 
 th = ParameterVector("t", 10)
 tiny_ansatz = QuantumCircuit(3)
@@ -22,11 +22,11 @@ tiny_ansatz.draw('mpl')
 
 def test_muable_optimizer_initialization():
     """Test that MutableOptimizer correctly initializes."""
-    mo = MutableOptimizer(AdaptiveAnsatz(tiny_ansatz), SPSA())
+    mo = MutableAnsatzExperiment(AdaptiveAnsatz(tiny_ansatz), SPSA())
     assert isinstance(mo.ansatz, QuantumCircuit)
 
 def test_insert_at():
-    mo = MutableOptimizer(AdaptiveAnsatz(tiny_ansatz), SPSA())
+    mo = MutableAnsatzExperiment(AdaptiveAnsatz(tiny_ansatz), SPSA())
     mo.insert_at('cz', [0, 1], 0)
     mo.insert_at('cz', [1, 2], 0)
     mo.insert_at('rx', [0], 3)
