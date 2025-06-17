@@ -1,7 +1,7 @@
 import random, logging
 
 from qiskit import QuantumCircuit
-from qiskit.circuit import ParameterVector, CircuitInstruction, Qubit
+from qiskit.circuit import Parameter, CircuitInstruction, Qubit
 from qiskit.transpiler.passes import RemoveBarriers
 from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 
@@ -51,21 +51,52 @@ class AdaptiveAnsatz:
         self.track_history = track_history
         
         ansatz_no_barriers = RemoveBarriers()(initial_ansatz)
-        # Extract existing parameters
-        existing_params = ansatz_no_barriers.parameters
-        num_params = len(existing_params)
+        # Re-arrange parameters
+        ansatz_re_arranged_params = AdaptiveAnsatz.re_arrange_gate_params(ansatz_no_barriers)
+        self.current_ansatz = ansatz_re_arranged_params
 
-        # Create a ParameterVector and replace parameters
-        self.param_vector = ParameterVector("θ", num_params)
-        param_map = {p: self.param_vector[i] for i, p in enumerate(existing_params)}
+        # Create a list of parameters
+        self.params: list[Parameter] = [Parameter(f"θ_{i}") for i in range(ansatz_re_arranged_params.num_parameters)]
         
-        self.current_ansatz = ansatz_no_barriers.assign_parameters(param_map)
+        # Initialize a list to track the history
         self.history: list[QuantumCircuit] = [self.current_ansatz] if track_history else []
+
+    @staticmethod
+    def re_arrange_gate_params(circuit: QuantumCircuit) -> QuantumCircuit:
+        """
+        Reassigns the parameters of a quantum circuit to a new, ordered list of parameters.
+
+        This is useful when you want to standardize or reorder the parameters in a circuit,
+        for example to allow consistent mapping and optimization, especially after modifying
+        the circuit structure (e.g., adding/removing gates).
+
+        The method constructs a new list of `Parameter` of the same length as the number of
+        parameters in the input circuit, and maps existing parameters to new parameters
+        indexed in order of appearance.
+
+        Parameters
+        ----------
+        circuit : QuantumCircuit
+            The quantum circuit whose parameters should be reassigned.
+
+        Returns
+        -------
+        QuantumCircuit
+            A new quantum circuit with the same structure but with parameters replaced
+            by a new list of `Parameter`s.
+        """
+        existing_params = circuit.parameters
+        num_params = circuit.num_parameters
+        
+        params = [Parameter(f"θ_{i}") for i in  range(num_params)]
+        param_map = {p: params[i] for i, p in enumerate(existing_params)}
+        
+        return circuit.assign_parameters(param_map)
         
     def add_gate_at_index(self, gate_name: str, index: int, qubits: list[int] | list[Qubit]) -> None:
         """
-        Add a gate from the instruction map at a specific index in the circuit data and adjust
-        ParameterVector accordingly.
+        Add a gate from the instruction map at a specific index in the circuit data and adjust the
+        `Parameter` list accordingly.
 
         Parameters
         ----------
@@ -89,10 +120,11 @@ class AdaptiveAnsatz:
 
         instruction = INSTRUCTION_MAP[gate_name]
         
-        # Resize parameter vector if needed
+        # Resize parameter list if needed, always adding a new index
         if instruction.params:
-            self.param_vector.resize(len(self.param_vector) + 1)
-            new_param = self.param_vector[-1]
+            highest_index = max(int(s.name.split("_")[1]) for s in self.params)
+            self.params += [Parameter(f"θ_{highest_index + 1}")]
+            new_param = self.params[-1]
 
             # Create gate instruction
             instruction_with_params = instruction.copy()
@@ -130,8 +162,8 @@ class AdaptiveAnsatz:
         
     def remove_gate_by_index(self, indices: int | list[int]) -> None:
         """
-        Remove one or multiple gates from the ansatz at specified indices and adjust ParameterVector 
-        accordingly.
+        Remove one or multiple gates from the ansatz at specified indices and adjust the 
+        `Parameter` list accordingly.
 
         Parameters
         ----------
@@ -152,22 +184,23 @@ class AdaptiveAnsatz:
         # Sort indices in descending order to prevent shifting issues when deleting
         indices.sort(reverse=True)
         
-        param_indices_to_remove = []
+        removed_params_names = []
         
         for index in indices:
             instruction = INSTRUCTION_MAP[self.current_ansatz.data[index].name]
             params = instruction.params
             
+            # Track parameter indices to remove
+            if params:
+                removed_param = self.current_ansatz.data[index].params[0]
+                removed_params_names.append(removed_param.name)
+            
             # Remove the gate from the circuit
             del self.current_ansatz.data[index]
             
-            # Track parameter indices to remove
-            if params:
-                param_indices_to_remove.append(index)
         
         # Remove parameters in descending order to avoid re-indexing issues
-        for _ in sorted(set(param_indices_to_remove), reverse=True):
-            self.param_vector.resize(len(self.param_vector) - 1)
+        self.params = [param for param in self.params if param.name not in removed_params_names]
         
         # Save state if tracking history
         self._save_state()
@@ -230,14 +263,4 @@ class AdaptiveAnsatz:
         """
         
         self.current_ansatz = new_ansatz.copy()
-    
-    def update_parameter_vector(self, new_vector: ParameterVector) -> None:
-        """
-        Update the parameter vector.
 
-        Parameters
-        ----------
-        new_vector : ParameterVector
-            The new vector to be used.
-        """
-        self.param_vector = new_vector
