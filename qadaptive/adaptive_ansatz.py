@@ -205,17 +205,12 @@ class AdaptiveAnsatz:
         # Save state if tracking history
         self._save_state()
 
-    def remove_random_gate(self, index: int) -> None:
+    def remove_random_gate(self) -> None:
         """
-        Remove a gate from the ansatz by index.
-
-        Parameters
-        ----------
-        index : int
-            The index of the gate in the circuit to remove.
+        Remove a gate randomly.
         """
-        self.current_ansatz.data.pop(index)
-        self._save_state()
+        # TODO: Implement
+        pass
 
     def _save_state(self) -> None:
         """Save the current ansatz to history if tracking is enabled."""
