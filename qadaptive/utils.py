@@ -1,13 +1,10 @@
-from qiskit.transpiler.basepasses import TransformationPass
-from qiskit.dagcircuit import DAGCircuit, DAGInNode, DAGOpNode
 from qiskit.circuit.library import RZGate, RXGate, RYGate
 from qiskit.circuit import QuantumCircuit, ParameterVector, Parameter
+from qiskit.dagcircuit import DAGCircuit, DAGInNode, DAGOpNode, DAGOutNode
 from qiskit.transpiler import PassManager
-from qiskit.converters import circuit_to_dag, dag_to_circuit
-
 from qiskit.transpiler.basepasses import TransformationPass
-from qiskit.dagcircuit import DAGCircuit, DAGOpNode, DAGInNode
-from qiskit.circuit.library import RXGate, RYGate, RZGate
+from qiskit.transpiler.passes import CommutativeCancellation, CommutativeInverseCancellation
+from qiskit.converters import circuit_to_dag, dag_to_circuit
 
 class RemoveUnnecessaryControlledGates(TransformationPass):
     """
@@ -38,7 +35,6 @@ class RemoveUnnecessaryControlledGates(TransformationPass):
                     dag.remove_op_node(node)
         return dag
 
-
 class RemoveInitialRZ(TransformationPass):
     """
     A transpiler pass to remove initial RZ gates from a DAGCircuit.
@@ -67,7 +63,35 @@ class RemoveInitialRZ(TransformationPass):
                 if isinstance(list(predecessors)[0], DAGInNode):
                     dag.remove_op_node(node)
         return dag
+    
+class RemoveFinalRZ(TransformationPass):
+    """
+    A transpiler pass to remove final RZ gates from a DAGCircuit.
 
+    This pass identifies RZ gates that are applied at the end of the circuit
+    (i.e., their successor are output nodes) and removes them.
+    """
+
+    def run(self, dag: DAGCircuit) -> DAGCircuit:
+        """
+        Run the pass on the DAGCircuit.
+
+        Parameters
+        ----------
+        dag : DAGCircuit
+            The DAGCircuit to be transformed.
+
+        Returns
+        -------
+        DAGCircuit
+            The transformed DAGCircuit with initial RZ gates removed.
+        """
+        for node in dag.op_nodes():
+            if isinstance(node.op, RZGate):
+                successors = dag.successors(node)
+                if isinstance(list(successors)[0], DAGOutNode):
+                    dag.remove_op_node(node)
+        return dag
 
 class MergeConsecutiveRotations(TransformationPass):
     """
@@ -169,8 +193,12 @@ class ReplaceConsecutiveRotationsWithRxRyRx(TransformationPass):
         return dag
     
 custom_pass_manager = PassManager([
-    RemoveUnnecessaryControlledGates(),
+    CommutativeCancellation(),
     RemoveInitialRZ(),
+    RemoveFinalRZ(),
+    RemoveUnnecessaryControlledGates(),
     MergeConsecutiveRotations(),
-    ReplaceConsecutiveRotationsWithRxRyRx()
+    ReplaceConsecutiveRotationsWithRxRyRx(),
+    CommutativeCancellation(),
+    CommutativeInverseCancellation(),
 ])

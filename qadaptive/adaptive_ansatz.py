@@ -259,3 +259,8 @@ class AdaptiveAnsatz:
         
         self.current_ansatz = new_ansatz.copy()
 
+    def update_params(self) -> None:
+        """
+        Update the parameters in case current_ansatz was changed.
+        """
+        self.params = [param for param in self.params if param.name in map(lambda x : x.name, self.current_ansatz.parameters)]
