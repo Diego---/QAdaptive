@@ -512,7 +512,7 @@ class MutableAnsatzExperiment:
             Position from where to remove the gate.
         """
         was_2qbg = False
-        if len(self.ansatz.data[circ_ind].parameters) == 2:
+        if len(self.ansatz.data[circ_ind].qubits) == 2:
             was_2qbg = True
         self.adaptive_ansatz.remove_gate_by_index(circ_ind)
         if was_2qbg:
