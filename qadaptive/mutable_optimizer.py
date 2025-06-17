@@ -49,7 +49,8 @@ class MutableAnsatzExperiment:
         track_gradients: bool = True,
         callback: CALLBACK | list[CALLBACK] | None = None,
         termination_checker: TERMINATIONCHECKER | None = None,
-        **optimizer_options
+        optimizer_options: dict | None = None,
+        optimizer_class: str | None = None,
         ) -> None:
         """
         Initialize the MutableOptimizer.
@@ -72,9 +73,13 @@ class MutableAnsatzExperiment:
             function signature has to be: (the parameters, the function value, the number
             of function evaluations, the stepsize, whether the step was accepted). If the callback
             returns True, the optimization is terminated.
-        optimizer_options
-            Options to be passed to the default optimizer.
-            
+        optimizer_options : dict, optional
+            Options to be passed to an optimizer. Defaults to None.
+        optimizer_class : str, optional
+            The type of optimizer to be used.
+            **Note:** This parameter is reserved for future functionality and
+            has no effect in the current version. Default is None.
+                        
         Notes
         ----------
         The optimizers provided must have the following methods available:
@@ -83,7 +88,8 @@ class MutableAnsatzExperiment:
         """
         self.adaptive_ansatz = adaptive_ansatz
         self.ansatz: QuantumCircuit = adaptive_ansatz.get_current_ansatz()
-        self.optimizer = SPSA(**optimizer_options) if optimizer is None else optimizer
+        # TODO: Use different optimization classes
+        self.optimizer = SPSA(**optimizer_options) if optimizer_options is not None else optimizer
         self.track_gradients = track_gradients
         self.gradient_history = {0 : []} if track_gradients else None
         # Make callback a list
@@ -106,9 +112,49 @@ class MutableAnsatzExperiment:
         # n'th two qubit gate. No gate is locked by default.
         self.locked_gates = {i : False for i in range(len(self._2qg_positions))}
         
-    def refresh_optimizer(self) -> None:
-        # TODO: refresh optimizer for next optimization
-        fresh_optimizer = self.optimizer
+    def set_optimizer(
+        self, optimizer: Optimizer | None = None, optimizer_options: dict | None = None
+        ) -> None:
+        """
+        Sets the optimizer for the experiment.
+
+        This method configures the optimizer to be used in the variational experiment.
+        The user can either provide a pre-initialized optimizer object or specify
+        the options for the default SPSA (Simultaneous Perturbation Stochastic
+        Approximation) optimizer.
+
+        Parameters
+        ----------
+        optimizer : Optimizer | None, optional
+            An instance of an Optimizer class. If provided, this optimizer will be
+            used for the experiment. Default is None.
+        optimizer_options : dict | None, optional
+            A dictionary of options to initialize the SPSA optimizer. This is
+            only used if the `optimizer` argument is None. Common keys include
+            'maxiter', 'learning_rate', and 'perturbation'.
+
+        Raises
+        ------
+        ValueError
+            If both `optimizer` and `optimizer_options` are None.
+
+        Examples
+        --------
+        >>> experiment = MutableAnsatzExperiment()
+        >>> from qiskit.algorithms.optimizers import COBYLA
+        >>> cobyla_optimizer = COBYLA(maxiter=500)
+        >>> experiment.set_optimizer(optimizer=cobyla_optimizer)
+
+        >>> experiment = MutableAnsatzExperiment()
+        >>> spsa_options = {'maxiter': 100, 'learning_rate': 0.01}
+        >>> experiment.set_optimizer(optimizer_options=spsa_options)
+        """
+        if optimizer is not None:
+            self.optimizer = optimizer
+        elif optimizer_options is not None:
+            self.optimizer = SPSA(**optimizer_options)
+        else:
+            raise ValueError("Either 'optimizer' or 'optimizer_options' must be provided.")
 
     def step(
         self, 
@@ -138,6 +184,13 @@ class MutableAnsatzExperiment:
         - Number of cost function evaluations is increased.
         - The number of iterations is increased.
         """
+        
+        # Check if the optimizer attribute has been set.
+        if self.optimizer is None:
+            raise RuntimeError(
+                "The optimizer is not set. Set an optimizer with the  "
+                "`set_optimizer()` method before running an optimization step."
+            )
         
         current_ansatz = self.adaptive_ansatz.current_ansatz
         new_kwargs = {**kwargs, 'ansatz': current_ansatz}
