@@ -230,17 +230,11 @@ class MutableAnsatzExperiment:
         # Placeholder for actual gradient computation
         return np.random.randn(len(self.adaptive_ansatz.param_vector))
 
-    def update_parameters(self, gradients: np.ndarray):
+    def update_params(self):
         """
         Update ansatz parameters using the optimizer.
-
-        Parameters
-        ----------
-        gradients : np.ndarray
-            The computed gradients.
         """
-        # Placeholder: Apply optimizer update
-        pass
+        self.adaptive_ansatz.update_params()
     
     def _update_ansatz(self) -> None:
         """Update the ansatz attribute."""
@@ -584,9 +578,13 @@ class MutableAnsatzExperiment:
         """
         old_num_2qbg = len(self._get_two_qubit_gate_indices())
         
-        logger.info("Simplified ansatz by doing compilation passes.")
-        logger.info(f"Updated parameter vector from {self.adaptive_ansatz.param_vector} to {new_vector}.")
+        simplified_ansatz = custom_pass_manager.run(self.adaptive_ansatz.current_ansatz)
+        simplified_ansatz = custom_pass_manager.run(simplified_ansatz)
+        self.adaptive_ansatz.current_ansatz = simplified_ansatz
         
+        self.update_params()
+
+        logger.info("Simplified ansatz by doing compilation passes.")        
         self._update_ansatz()
         
         new_num_2qbg = len(self._get_two_qubit_gate_indices())
