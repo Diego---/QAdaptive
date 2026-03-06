@@ -5,3 +5,4 @@ QAE.code-workspace
 *.egg
 *.pyc
 *.ipynb
+/.vscode
