@@ -63,7 +63,7 @@ class AdaptiveAnsatz:
         self.params: list[Parameter] = [Parameter(f"θ_{i}") for i in range(ansatz_re_arranged_params.num_parameters)]
         
         # Initialize a list to track the history
-        self.history: list[QuantumCircuit] = [self.current_ansatz] if track_history else []
+        self.history: list[QuantumCircuit] = [self.current_ansatz.copy()] if track_history else []
 
     @staticmethod
     def re_arrange_gate_params(circuit: QuantumCircuit) -> QuantumCircuit:
@@ -344,7 +344,8 @@ class AdaptiveAnsatz:
         if not self.track_history or len(self.history) < steps + 1:
             raise ValueError("Cannot rollback beyond available history.")
         self.current_ansatz = self.history[-(steps + 1)].copy()
-        self.history = self.history[:-(steps + 1)]
+        self.history = self.history[:-(steps)]
+        self.update_params()
 
     def get_current_ansatz(self) -> QuantumCircuit:
         """
