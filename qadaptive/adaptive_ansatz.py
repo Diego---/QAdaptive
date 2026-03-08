@@ -177,31 +177,34 @@ class AdaptiveAnsatz:
         """
         if isinstance(indices, int):
             indices = [indices]
-        
+
         if any(idx < 0 or idx >= len(self.current_ansatz.data) for idx in indices):
             raise IndexError("One or more gate indices are out of range.")
         
         # Sort indices in descending order to prevent shifting issues when deleting
         indices.sort(reverse=True)
         
-        removed_params_names = []
+        removed_param_names = set()
         
         for index in indices:
-            instruction = INSTRUCTION_MAP[self.current_ansatz.data[index].name]
-            params = instruction.params
+            operation = self.current_ansatz.data[index].operation
             
-            # Track parameter indices to remove
-            if params:
-                removed_param = self.current_ansatz.data[index].params[0]
-                removed_params_names.append(removed_param.name)
+            for param in operation.params:
+                # Case 1: plain Parameter
+                if isinstance(param, Parameter):
+                    removed_param_names.add(param.name)
+                # Case 2: ParameterExpression or similar symbolic object
+                elif hasattr(param, "parameters"):
+                    for subparam in param.parameters:
+                        removed_param_names.add(subparam.name)
+                # Case 3: numeric value (float, int, etc.) -> ignore
             
             # Remove the gate from the circuit
             del self.current_ansatz.data[index]
             
         
-        # Remove parameters in descending order to avoid re-indexing issues
-        self.params = [param for param in self.params if param.name not in removed_params_names]
-        
+        # Update parameters
+        self.update_params()
         # Save state if tracking history
         self._save_state()
 
@@ -261,6 +264,9 @@ class AdaptiveAnsatz:
 
     def update_params(self) -> None:
         """
-        Update the parameters in case current_ansatz was changed.
+        Synchronize `self.params` with the parameters currently present in `current_ansatz`.
         """
-        self.params = [param for param in self.params if param.name in map(lambda x : x.name, self.current_ansatz.parameters)]
+        self.params = sorted(
+            list(self.current_ansatz.parameters),
+            key=lambda p: int(p.name.split("_")[1])
+    )
