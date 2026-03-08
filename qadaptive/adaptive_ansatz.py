@@ -92,6 +92,32 @@ class AdaptiveAnsatz:
         param_map = {p: params[i] for i, p in enumerate(existing_params)}
         
         return circuit.assign_parameters(param_map)
+    
+    def _new_parameters(self, n: int) -> list[Parameter]:
+        """
+        Create and register `n` fresh parameters.
+
+        Parameters
+        ----------
+        n : int
+            Number of new parameters.
+
+        Returns
+        -------
+        list[Parameter]
+            The newly created parameters.
+        """
+        if n < 0:
+            raise ValueError("Number of new parameters must be non-negative.")
+
+        if not self.params:
+            start = 0
+        else:
+            start = max(int(p.name.split("_")[1]) for p in self.params) + 1
+
+        new_params = [Parameter(f"θ_{i}") for i in range(start, start + n)]
+        self.params.extend(new_params)
+        return new_params
         
     def add_gate_at_index(self, gate_name: str, index: int, qubits: list[int] | list[Qubit]) -> None:
         """
@@ -122,10 +148,7 @@ class AdaptiveAnsatz:
         
         # Resize parameter list if needed, always adding a new index
         if instruction.params:
-            highest_index = max(int(s.name.split("_")[1]) for s in self.params)
-            self.params += [Parameter(f"θ_{highest_index + 1}")]
-            new_param = self.params[-1]
-
+            new_param = self._new_parameters(1)[0]
             # Create gate instruction
             instruction_with_params = instruction.copy()
             instruction_with_params.params = [new_param]
