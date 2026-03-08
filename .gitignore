@@ -1,5 +1,8 @@
 QAE.code-workspace
+/build/
+/dist/
 *.egg-info/
 *.egg
 *.pyc
 *.ipynb
+/.vscode
