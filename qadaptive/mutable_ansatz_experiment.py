@@ -621,7 +621,7 @@ class MutableAnsatzExperiment:
         - If the cost increases, the removal is accepted with probability `p`.
         - If the removal is **rejected**, the gate may be locked to prevent further attempts.
         """
-        assert len(self._last_params)>0, "Ansatz has not been trained yet. Train to set last parameters."
+        assert len(self._last_params) > 0, "Ansatz has not been trained yet. Train to set last parameters."
         
         if not self._2qg_positions:
             return  # No 2-qubit gates to remove
