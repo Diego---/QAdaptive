@@ -5,6 +5,8 @@ from qiskit.circuit import Parameter, CircuitInstruction, Qubit
 from qiskit.transpiler.passes import RemoveBarriers
 from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 
+from qadaptive.operator_pool import DEFAULT_BLOCK_POOL, PoolBlock
+
 logger = logging.getLogger(__name__)
 
 INSTRUCTION_MAP = get_standard_gate_name_mapping()
@@ -22,7 +24,8 @@ class AdaptiveAnsatz:
         self, 
         initial_ansatz: QuantumCircuit, 
         track_history: bool = True,
-        operator_pool: list[str] = None
+        operator_pool: list[str] | None = None,
+        block_pool: dict[str, PoolBlock] | None = None,
         ) -> None:
         """
         Initialize the AdaptiveAnsatz.
@@ -48,6 +51,7 @@ class AdaptiveAnsatz:
             )
             
         self.operator_pool = operator_pool
+        self.block_pool = DEFAULT_BLOCK_POOL if block_pool is None else block_pool
         self.track_history = track_history
         
         ansatz_no_barriers = RemoveBarriers()(initial_ansatz)
@@ -166,6 +170,70 @@ class AdaptiveAnsatz:
         
         # Save state if tracking history
         self._save_state()
+        
+    def add_block_at_index(
+        self,
+        block_name: str,
+        index: int,
+        ansatz_qubits: list[int] | list[Qubit],
+    ) -> None:
+        """
+        Insert a parametrized block from the block pool at a specific circuit index.
+
+        Parameters
+        ----------
+        block_name : str
+            Name of the block in `self.block_pool`.
+        index : int
+            Circuit-data index at which the block should be inserted.
+        ansatz_qubits : list[int] | list[Qubit]
+            Qubits from the ansatz on which the block acts.
+
+        Raises
+        ------
+        IndexError
+            If the index is out of range.
+        AssertionError
+            If the block name is unknown.
+        ValueError
+            If the wrong number of qubits is provided.
+        """
+
+        if index < 0 or index > len(self.current_ansatz.data):
+            raise IndexError("Block index out of range.")
+
+        assert block_name in self.block_pool, (
+            f"Block '{block_name}' is not part of the available block pool: "
+            f"{list(self.block_pool.keys())}."
+        )
+
+        block = self.block_pool[block_name]
+
+        if len(ansatz_qubits) != block.num_qubits:
+            raise ValueError(
+                f"Block '{block_name}' acts on {block.num_qubits} qubits, "
+                f"but got {len(ansatz_qubits)}."
+            )
+
+        new_params = self._new_parameters(block.num_parameters)
+        block_circuit = block.build(new_params)
+
+        local_to_target = {
+            block_circuit.qubits[i]: ansatz_qubits[i] for i in range(block.num_qubits)
+        }
+
+        for offset, inst in enumerate(block_circuit.data):
+            mapped_qubits = tuple(local_to_target[q] for q in inst.qubits)
+            self.current_ansatz.data.insert(
+                index + offset,
+                CircuitInstruction(
+                    operation=inst.operation.copy(),
+                    qubits=mapped_qubits,
+                    clbits=list(inst.clbits),
+                ),
+            )
+
+        self._save_state()
             
     def add_random_gate(self) -> tuple[str, ]:
         """
@@ -182,6 +250,22 @@ class AdaptiveAnsatz:
         self.add_gate_at_index(gate_name, index, qubits)
         
         return gate_name, qubits, index
+    
+    def add_random_block(self) -> tuple[str, list[Qubit], int]:
+        """
+        Insert a random block from the block pool at a random position.
+        """
+        if not self.current_ansatz.data:
+            index = 0
+        else:
+            index = random.randint(0, len(self.current_ansatz.data))
+
+        block_name = random.choice(list(self.block_pool.keys()))
+        block = self.block_pool[block_name]
+        qubits = random.sample(self.current_ansatz.qubits, block.num_qubits)
+
+        self.add_block_at_index(block_name, index, qubits)
+        return block_name, qubits, index
         
     def remove_gate_by_index(self, indices: int | list[int]) -> None:
         """
