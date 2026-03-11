@@ -63,7 +63,7 @@ attributes are also accessed:
 - `_nextfev`
 
 This means that, in its current state, `MutableAnsatzExperiment` is only compatible
-with the custom SPSA implementation avilable at [text](https://github.com/Diego---/QAE313).
+with the custom SPSA implementation avilable at [QAE](https://github.com/Diego---/QAE313).
 rather than with arbitrary Qiskit optimizers out of the box.
 
 If you plan to use `MutableAnsatzExperiment` in its current state, ensure the
