@@ -46,3 +46,22 @@ def test_insert_random():
 def test_simplify_methods():
     pass
 
+def test_insert_block_at():
+    mo = MutableAnsatzExperiment(AdaptiveAnsatz(tiny_ansatz))
+    old_len = len(mo.ansatz.data)
+    old_num_params = len(mo.ansatz.parameters)
+
+    mo.insert_block_at("rz_rx_rz", [0], 0)
+
+    assert len(mo.ansatz.data) == old_len + 3
+    assert len(mo.ansatz.parameters) == old_num_params + 3
+
+def test_insert_two_qubit_block_at():
+    mo = MutableAnsatzExperiment(AdaptiveAnsatz(tiny_ansatz))
+    old_len = len(mo.ansatz.data)
+    old_num_params = len(mo.ansatz.parameters)
+
+    mo.insert_block_at("cx_identity", [0, 1], 0)
+
+    assert len(mo.ansatz.data) == old_len + 8
+    assert len(mo.ansatz.parameters) == old_num_params + 6

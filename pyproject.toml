@@ -13,7 +13,7 @@ dependencies = [
     "numpy",
     "matplotlib",
     "IPython",
-    "qiskit >= 1.1",
+    "qiskit >= 1.1, <2",
     "qiskit_experiments >= 0.6.1",
     "qiskit_algorithms >= 0.3.0"
 ]

@@ -5,6 +5,8 @@ from qiskit.circuit import Parameter, CircuitInstruction, Qubit
 from qiskit.transpiler.passes import RemoveBarriers
 from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 
+from qadaptive.operator_pool import DEFAULT_BLOCK_POOL, PoolBlock
+
 logger = logging.getLogger(__name__)
 
 INSTRUCTION_MAP = get_standard_gate_name_mapping()
@@ -22,7 +24,8 @@ class AdaptiveAnsatz:
         self, 
         initial_ansatz: QuantumCircuit, 
         track_history: bool = True,
-        operator_pool: list[str] = None
+        operator_pool: list[str] | None = None,
+        block_pool: dict[str, PoolBlock] | None = None,
         ) -> None:
         """
         Initialize the AdaptiveAnsatz.
@@ -48,6 +51,7 @@ class AdaptiveAnsatz:
             )
             
         self.operator_pool = operator_pool
+        self.block_pool = DEFAULT_BLOCK_POOL if block_pool is None else block_pool
         self.track_history = track_history
         
         ansatz_no_barriers = RemoveBarriers()(initial_ansatz)
@@ -59,7 +63,7 @@ class AdaptiveAnsatz:
         self.params: list[Parameter] = [Parameter(f"θ_{i}") for i in range(ansatz_re_arranged_params.num_parameters)]
         
         # Initialize a list to track the history
-        self.history: list[QuantumCircuit] = [self.current_ansatz] if track_history else []
+        self.history: list[QuantumCircuit] = [self.current_ansatz.copy()] if track_history else []
 
     @staticmethod
     def re_arrange_gate_params(circuit: QuantumCircuit) -> QuantumCircuit:
@@ -92,6 +96,32 @@ class AdaptiveAnsatz:
         param_map = {p: params[i] for i, p in enumerate(existing_params)}
         
         return circuit.assign_parameters(param_map)
+    
+    def _new_parameters(self, n: int) -> list[Parameter]:
+        """
+        Create and register `n` fresh parameters.
+
+        Parameters
+        ----------
+        n : int
+            Number of new parameters.
+
+        Returns
+        -------
+        list[Parameter]
+            The newly created parameters.
+        """
+        if n < 0:
+            raise ValueError("Number of new parameters must be non-negative.")
+
+        if not self.params:
+            start = 0
+        else:
+            start = max(int(p.name.split("_")[1]) for p in self.params) + 1
+
+        new_params = [Parameter(f"θ_{i}") for i in range(start, start + n)]
+        self.params.extend(new_params)
+        return new_params
         
     def add_gate_at_index(self, gate_name: str, index: int, qubits: list[int] | list[Qubit]) -> None:
         """
@@ -122,10 +152,7 @@ class AdaptiveAnsatz:
         
         # Resize parameter list if needed, always adding a new index
         if instruction.params:
-            highest_index = max(int(s.name.split("_")[1]) for s in self.params)
-            self.params += [Parameter(f"θ_{highest_index + 1}")]
-            new_param = self.params[-1]
-
+            new_param = self._new_parameters(1)[0]
             # Create gate instruction
             instruction_with_params = instruction.copy()
             instruction_with_params.params = [new_param]
@@ -143,6 +170,70 @@ class AdaptiveAnsatz:
         
         # Save state if tracking history
         self._save_state()
+        
+    def add_block_at_index(
+        self,
+        block_name: str,
+        index: int,
+        ansatz_qubits: list[int] | list[Qubit],
+    ) -> None:
+        """
+        Insert a parametrized block from the block pool at a specific circuit index.
+
+        Parameters
+        ----------
+        block_name : str
+            Name of the block in `self.block_pool`.
+        index : int
+            Circuit-data index at which the block should be inserted.
+        ansatz_qubits : list[int] | list[Qubit]
+            Qubits from the ansatz on which the block acts.
+
+        Raises
+        ------
+        IndexError
+            If the index is out of range.
+        AssertionError
+            If the block name is unknown.
+        ValueError
+            If the wrong number of qubits is provided.
+        """
+
+        if index < 0 or index > len(self.current_ansatz.data):
+            raise IndexError("Block index out of range.")
+
+        assert block_name in self.block_pool, (
+            f"Block '{block_name}' is not part of the available block pool: "
+            f"{list(self.block_pool.keys())}."
+        )
+
+        block = self.block_pool[block_name]
+
+        if len(ansatz_qubits) != block.num_qubits:
+            raise ValueError(
+                f"Block '{block_name}' acts on {block.num_qubits} qubits, "
+                f"but got {len(ansatz_qubits)}."
+            )
+
+        new_params = self._new_parameters(block.num_parameters)
+        block_circuit = block.build(new_params)
+
+        local_to_target = {
+            block_circuit.qubits[i]: ansatz_qubits[i] for i in range(block.num_qubits)
+        }
+
+        for offset, inst in enumerate(block_circuit.data):
+            mapped_qubits = tuple(local_to_target[q] for q in inst.qubits)
+            self.current_ansatz.data.insert(
+                index + offset,
+                CircuitInstruction(
+                    operation=inst.operation.copy(),
+                    qubits=mapped_qubits,
+                    clbits=list(inst.clbits),
+                ),
+            )
+
+        self._save_state()
             
     def add_random_gate(self) -> tuple[str, ]:
         """
@@ -159,6 +250,22 @@ class AdaptiveAnsatz:
         self.add_gate_at_index(gate_name, index, qubits)
         
         return gate_name, qubits, index
+    
+    def add_random_block(self) -> tuple[str, list[Qubit], int]:
+        """
+        Insert a random block from the block pool at a random position.
+        """
+        if not self.current_ansatz.data:
+            index = 0
+        else:
+            index = random.randint(0, len(self.current_ansatz.data))
+
+        block_name = random.choice(list(self.block_pool.keys()))
+        block = self.block_pool[block_name]
+        qubits = random.sample(self.current_ansatz.qubits, block.num_qubits)
+
+        self.add_block_at_index(block_name, index, qubits)
+        return block_name, qubits, index
         
     def remove_gate_by_index(self, indices: int | list[int]) -> None:
         """
@@ -177,31 +284,34 @@ class AdaptiveAnsatz:
         """
         if isinstance(indices, int):
             indices = [indices]
-        
+
         if any(idx < 0 or idx >= len(self.current_ansatz.data) for idx in indices):
             raise IndexError("One or more gate indices are out of range.")
         
         # Sort indices in descending order to prevent shifting issues when deleting
         indices.sort(reverse=True)
         
-        removed_params_names = []
+        removed_param_names = set()
         
         for index in indices:
-            instruction = INSTRUCTION_MAP[self.current_ansatz.data[index].name]
-            params = instruction.params
+            operation = self.current_ansatz.data[index].operation
             
-            # Track parameter indices to remove
-            if params:
-                removed_param = self.current_ansatz.data[index].params[0]
-                removed_params_names.append(removed_param.name)
+            for param in operation.params:
+                # Case 1: plain Parameter
+                if isinstance(param, Parameter):
+                    removed_param_names.add(param.name)
+                # Case 2: ParameterExpression or similar symbolic object
+                elif hasattr(param, "parameters"):
+                    for subparam in param.parameters:
+                        removed_param_names.add(subparam.name)
+                # Case 3: numeric value (float, int, etc.) -> ignore
             
             # Remove the gate from the circuit
             del self.current_ansatz.data[index]
             
         
-        # Remove parameters in descending order to avoid re-indexing issues
-        self.params = [param for param in self.params if param.name not in removed_params_names]
-        
+        # Update parameters
+        self.update_params()
         # Save state if tracking history
         self._save_state()
 
@@ -234,7 +344,8 @@ class AdaptiveAnsatz:
         if not self.track_history or len(self.history) < steps + 1:
             raise ValueError("Cannot rollback beyond available history.")
         self.current_ansatz = self.history[-(steps + 1)].copy()
-        self.history = self.history[:-(steps + 1)]
+        self.history = self.history[:-(steps)]
+        self.update_params()
 
     def get_current_ansatz(self) -> QuantumCircuit:
         """
@@ -261,6 +372,9 @@ class AdaptiveAnsatz:
 
     def update_params(self) -> None:
         """
-        Update the parameters in case current_ansatz was changed.
+        Synchronize `self.params` with the parameters currently present in `current_ansatz`.
         """
-        self.params = [param for param in self.params if param.name in map(lambda x : x.name, self.current_ansatz.parameters)]
+        self.params = sorted(
+            list(self.current_ansatz.parameters),
+            key=lambda p: int(p.name.split("_")[1])
+    )

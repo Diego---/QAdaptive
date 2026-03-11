@@ -14,6 +14,8 @@ class RemoveUnnecessaryControlledGates(TransformationPass):
     (i.e., their predecessors are all input nodes) and removes them from the circuit.
     """
 
+    # TODO: Remove only if controll qubit is an input node for gates such as CX, 
+    # but remove only if both qubits are inputs for gates such as CZ.
     def run(self, dag: DAGCircuit) -> DAGCircuit:
         """
         Run the pass on the DAGCircuit.

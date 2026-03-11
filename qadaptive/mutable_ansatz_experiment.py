@@ -566,6 +566,41 @@ class MutableAnsatzExperiment:
             self._update_locked_gates_on_removal(circ_ind)
         self._update_ansatz()
         
+    def insert_block_at(
+        self,
+        block_name: str,
+        qubits: list[int],
+        circ_ind: int,
+    ) -> None:
+        """
+        Insert a block from the adaptive ansatz block pool.
+        
+        Parameters
+        ----------
+        block_name : str
+            The name of the block to insert. Must be a key in `self.adaptive_ansatz.block_pool`.
+        qubits : list[int]
+            The qubits on which to apply the block. The length of this list must match the number 
+            of qubits required by the block.
+        circ_ind : int
+            Circuit index at which the block should be added.
+        """
+        assert block_name in self.adaptive_ansatz.block_pool, (
+            f"Block {block_name} is not part of the available block pool: "
+            f"{list(self.adaptive_ansatz.block_pool.keys())}."
+        )
+
+        self.adaptive_ansatz.add_block_at_index(block_name, circ_ind, qubits)
+        logger.info(
+            f"Inserted block {block_name} on qubits {qubits} at position {circ_ind}."
+        )
+
+        self._update_ansatz()
+
+        if len(qubits) == 2:
+            self._2qg_positions = self._get_two_qubit_gate_indices()
+            self.locked_gates = {i: False for i in range(len(self._2qg_positions))}
+        
     def simplify_transpiler_passes(self) -> QuantumCircuit:
         """
         Remove conditional operations and Rz rotations at the start of the circuit and joing
