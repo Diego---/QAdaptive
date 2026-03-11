@@ -83,13 +83,11 @@ def _build_cx_identity(params: list[Parameter]) -> QuantumCircuit:
     For all parameters initialized to zero, the block is exactly identity.
     """
     qc = QuantumCircuit(2, name="cx_identity")
+    qc.cx(0, 1)
     qc.rz(params[0], 0)
     qc.rx(params[1], 0)
     qc.rz(params[2], 1)
     qc.rx(params[3], 1)
-    qc.cx(0, 1)
-    qc.rz(params[4], 0)
-    qc.rx(params[5], 1)
     qc.cx(0, 1)
     return qc
 
