@@ -102,7 +102,7 @@ DEFAULT_BLOCK_POOL: dict[str, PoolBlock] = {
     "cx_identity": PoolBlock(
         name="cx_identity",
         num_qubits=2,
-        num_parameters=6,
+        num_parameters=4,
         builder=_build_cx_identity,
     ),
 }
