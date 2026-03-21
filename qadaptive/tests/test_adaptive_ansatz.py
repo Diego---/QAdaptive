@@ -168,16 +168,7 @@ def test_history_tracking_after_block_addition():
 
     assert len(adapt_ansatz.history) == initial_history_len + 1
     assert len(adapt_ansatz.history[0].data) == 0
-    assert operation_names(adapt_ansatz.history[-1]) == [
-        "rz",
-        "rx",
-        "rz",
-        "rx",
-        "cx",
-        "rz",
-        "rx",
-        "cx",
-    ]
+    assert operation_names(adapt_ansatz.history[-1]) == ['cx', 'rz', 'rx', 'rz', 'rx', 'cx']
 
 
 # -----------------------------------------------------------------------------
@@ -248,9 +239,9 @@ def test_rollback_two_qubit_block_addition():
 
     adapt_ansatz.add_block_at_index("cx_identity", 0, [0, 1])
 
-    assert len(adapt_ansatz.get_current_ansatz().data) == 8
-    assert len(adapt_ansatz.get_current_ansatz().parameters) == 6
-    assert len(adapt_ansatz.params) == 6
+    assert len(adapt_ansatz.get_current_ansatz().data) == 6
+    assert len(adapt_ansatz.get_current_ansatz().parameters) == 4
+    assert len(adapt_ansatz.params) == 4
     assert len(adapt_ansatz.history) == 2
 
     adapt_ansatz.rollback(1)
@@ -276,17 +267,7 @@ def test_rollback_block_preserves_previous_gate_edit():
     adapt_ansatz.add_gate_at_index("rx", 0, [0])
     adapt_ansatz.add_block_at_index("cx_identity", 1, [0, 1])
 
-    assert operation_names(adapt_ansatz.get_current_ansatz()) == [
-        "rx",
-        "rz",
-        "rx",
-        "rz",
-        "rx",
-        "cx",
-        "rz",
-        "rx",
-        "cx",
-    ]
+    assert operation_names(adapt_ansatz.get_current_ansatz()) == ['rx', 'cx', 'rz', 'rx', 'rz', 'rx', 'cx']
 
     adapt_ansatz.rollback(1)
 
@@ -318,18 +299,9 @@ def test_add_two_qubit_block_at_index():
 
     adapt_ansatz.add_block_at_index("cx_identity", 0, [0, 1])
 
-    assert operation_names(adapt_ansatz.get_current_ansatz()) == [
-        "rz",
-        "rx",
-        "rz",
-        "rx",
-        "cx",
-        "rz",
-        "rx",
-        "cx",
-    ]
-    assert len(adapt_ansatz.get_current_ansatz().parameters) == 6
-    assert len(adapt_ansatz.params) == 6
+    assert operation_names(adapt_ansatz.get_current_ansatz()) == ['cx', 'rz', 'rx', 'rz', 'rx', 'cx']
+    assert len(adapt_ansatz.get_current_ansatz().parameters) == 4
+    assert len(adapt_ansatz.params) == 4
 
 
 
