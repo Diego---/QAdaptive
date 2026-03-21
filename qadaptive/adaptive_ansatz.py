@@ -378,3 +378,27 @@ class AdaptiveAnsatz:
             list(self.current_ansatz.parameters),
             key=lambda p: int(p.name.split("_")[1])
     )
+
+    def copy(self) -> "AdaptiveAnsatz":
+        """
+        Return a deep copy of the AdaptiveAnsatz.
+
+        Returns
+        -------
+        AdaptiveAnsatz
+            Independent copy of the current adaptive ansatz object.
+        """
+        new_obj = AdaptiveAnsatz(
+            initial_ansatz=self.current_ansatz.copy(),
+            track_history=self.track_history,
+            operator_pool=list(self.operator_pool),
+            block_pool=dict(self.block_pool),
+        )
+
+        # Preserve history independently.
+        if self.track_history:
+            new_obj.history = [qc.copy() for qc in self.history]
+        else:
+            new_obj.history = []
+
+        return new_obj
