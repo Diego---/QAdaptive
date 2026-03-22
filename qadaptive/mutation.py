@@ -297,3 +297,67 @@ def update_locked_gates_on_removal(
     logger.info("Updated locked gates after removal: %s", new_locked_gates)
 
     return dict(sorted(new_two_q_map.items())), new_locked_gates
+
+def get_two_qubit_gate_offsets(circuit: QuantumCircuit) -> list[int]:
+    """
+    Return the instruction offsets of all two-qubit gates in a circuit.
+
+    Parameters
+    ----------
+    circuit : QuantumCircuit
+        Circuit to inspect.
+
+    Returns
+    -------
+    list[int]
+        Sorted list of instruction offsets corresponding to two-qubit gates.
+    """
+    return [
+        idx
+        for idx, instruction in enumerate(circuit.data)
+        if len(instruction.qubits) == 2
+    ]
+
+
+def update_locked_gates_on_multiple_inserts(
+    circuit: QuantumCircuit,
+    inserted_indices: list[int],
+    old_two_q_map: TwoQMap,
+    locked_gates: set[LockId],
+) -> tuple[TwoQMap, set[LockId]]:
+    """
+    Update two-qubit bookkeeping after inserting multiple two-qubit gates.
+
+    Parameters
+    ----------
+    circuit : QuantumCircuit
+        Updated circuit after all insertions have already been applied.
+    inserted_indices : list[int]
+        Final circuit-data indices of the newly inserted two-qubit gates.
+    old_two_q_map : TwoQMap
+        Pre-insertion two-qubit gate map.
+    locked_gates : set[LockId]
+        Pre-insertion locked-gate set.
+
+    Returns
+    -------
+    tuple[TwoQMap, set[LockId]]
+        Updated two-qubit map and updated locked-gate set.
+
+    Notes
+    -----
+    The inserted indices must refer to the final post-insertion circuit and must
+    be provided in ascending order. Each inserted gate starts unlocked.
+    """
+    new_two_q_map = dict(old_two_q_map)
+    new_locked_gates = set(locked_gates)
+
+    for circ_ind in sorted(inserted_indices):
+        new_two_q_map, new_locked_gates = update_locked_gates_on_insert(
+            circuit=circuit,
+            circ_ind=circ_ind,
+            old_two_q_map=new_two_q_map,
+            locked_gates=new_locked_gates,
+        )
+
+    return new_two_q_map, new_locked_gates
