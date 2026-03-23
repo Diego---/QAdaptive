@@ -292,9 +292,11 @@ class AdaptiveAnsatz:
         indices.sort(reverse=True)
         
         removed_param_names = set()
+        removed_operations = []
         
         for index in indices:
             operation = self.current_ansatz.data[index].operation
+            removed_operations.append(operation)
             
             for param in operation.params:
                 # Case 1: plain Parameter
@@ -309,7 +311,7 @@ class AdaptiveAnsatz:
             # Remove the gate from the circuit
             del self.current_ansatz.data[index]
             
-        
+        logger.info("Removed gates at indices %s, corresponding to operations %s.", indices, removed_operations)
         # Update parameters
         self.update_params()
         # Save state if tracking history
