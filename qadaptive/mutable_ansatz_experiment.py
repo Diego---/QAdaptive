@@ -3,6 +3,7 @@ import logging, random
 from typing import Callable, SupportsFloat
 
 from qiskit.circuit import QuantumCircuit, Parameter
+from qiskit.transpiler import PassManager
 from qiskit_algorithms.optimizers.optimizer import Optimizer, OptimizerResult
 
 from qadaptive.adaptive_ansatz import AdaptiveAnsatz
@@ -19,8 +20,7 @@ from qadaptive.mutation import (
     get_two_qubit_gate_offsets,
     update_locked_gates_on_multiple_inserts
 )
-from qiskit.transpiler import PassManager
-from qadaptive.simplification import simplify_ansatz, two_q_pair_sequence
+from qadaptive.simplification import simplify_ansatz
 from qadaptive.pruning import evaluate_two_qubit_gate_pruning
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
@@ -59,6 +59,7 @@ class MutableAnsatzExperiment:
         self, 
         adaptive_ansatz: AdaptiveAnsatz,
         trainer: InnerLoopTrainer,
+        track_costs: bool = True,
         ) -> None:
         """
         Initialize the MutableAnsatzExperiment.
@@ -69,14 +70,16 @@ class MutableAnsatzExperiment:
             The adaptive ansatz to be optimized.
         trainer : InnerLoopTrainer
             An inner loop trainer object that handles the inner optimization.
+        track_costs : bool, optional
+            Indicates whether inner-loop cost history is being tracked. Defaults to True.
         """
         self.adaptive_ansatz = adaptive_ansatz.copy()
         self.ansatz: QuantumCircuit = self.adaptive_ansatz.get_current_ansatz()
         if trainer is None:
             raise ValueError("A trainer instance must be provided.")
         self.trainer = trainer
-        # Inner loop and outer loop iteration counters
         self._outer_iteration = 0
+        self.cost_history = [] if track_costs else None
         # Two qubit gate positions
         self._2qbg_positions = self._get_two_qubit_gate_indices()
         # Some 2 qubit gates will be important and thus get locked
@@ -399,7 +402,7 @@ class MutableAnsatzExperiment:
         """
         
         current_ansatz = self.adaptive_ansatz.get_current_ansatz()
-        return self.trainer.train_one_time(
+        result = self.trainer.train_one_time(
             ansatz=current_ansatz,
             loss_function=loss_function,
             initial_point=initial_point,
@@ -407,7 +410,11 @@ class MutableAnsatzExperiment:
             iterations=iterations,
             **kwargs,
         )
-
+        
+        if self.cost_history is not None:
+            self.cost_history.append(result)
+            
+        return result
 
     def insert_random(self) -> None:
         """
@@ -476,7 +483,6 @@ class MutableAnsatzExperiment:
             
         # Remove from ansatz first.
         self.adaptive_ansatz.remove_gate_by_index(circ_ind)
-        logger.info(f"Removed gate at position {circ_ind}.")
         
         # Update bookkeeping for 2Q-gate removal.
         if is_2qbg:
@@ -655,7 +661,13 @@ class MutableAnsatzExperiment:
             self._lock_circuit_index(decision.gate_to_remove)
         
     def get_current_parameters(self) -> list[Parameter]:
-        return self.adaptive_ansatz.get_current_ansatz().parameters        
+        return self.adaptive_ansatz.get_current_ansatz().parameters
+    
+    def draw_current_ansatz(self) -> None:
+        """
+        Draw the current ansatz circuit.
+        """
+        self.adaptive_ansatz.get_current_ansatz().draw('mpl').show()   
 
     @property
     def optimizer(self):
