@@ -143,6 +143,9 @@ def evaluate_two_qubit_gate_pruning(
         locked_gates=locked_gates,
         is_locked=is_locked,
     )
+    logger.info(
+        "Found %s to be the removable two-qubit gates for pruning.", removable_indices
+    )
 
     if not removable_indices:
         logger.info("No removable two-qubit gates available for pruning.")
@@ -160,6 +163,7 @@ def evaluate_two_qubit_gate_pruning(
         )
 
     gate_to_remove = int(rng.choice(removable_indices))
+    logger.info("Selected gate at circuit index %s for pruning attempt.", gate_to_remove)
     trial_ansatz = ansatz.copy()
     trial_ansatz.data.pop(gate_to_remove)
 
