@@ -89,6 +89,29 @@ def _build_cx_identity(params: list[Parameter]) -> QuantumCircuit:
     qc.cx(0, 1)
     return qc
 
+def _build_cz_identity(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit identity-initializable block.
+
+    The block is
+        CZ(0, 1)
+        RY(b) on q0
+        RX(c) on q0
+        CZ(0, 1)
+        RY(d) on q1
+        RX(e) on q1
+
+    For all parameters initialized to zero, the block is exactly identity.
+    """
+    qc = QuantumCircuit(2, name="cz_identity")
+    qc.cz(0, 1)
+    qc.ry(params[0], 0)
+    qc.rx(params[1], 0)
+    qc.cz(0, 1)
+    qc.ry(params[2], 1)
+    qc.rx(params[3], 1)
+    return qc
+
 
 DEFAULT_BLOCK_POOL: dict[str, PoolBlock] = {
     "rz_rx_rz": PoolBlock(
@@ -102,5 +125,11 @@ DEFAULT_BLOCK_POOL: dict[str, PoolBlock] = {
         num_qubits=2,
         num_parameters=4,
         builder=_build_cx_identity,
+    ),
+    "cz_identity": PoolBlock(
+        name="cy_identity",
+        num_qubits=2,
+        num_parameters=4,
+        builder=_build_cz_identity
     ),
 }
