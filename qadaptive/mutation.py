@@ -171,7 +171,7 @@ def update_locked_gates_on_insert(
     circ_ind: int,
     old_two_q_map: TwoQMap,
     locked_gates: set[LockId],
-) -> tuple[TwoQMap, set[LockId]]:
+) -> set[LockId]:
     """
     Update two-qubit bookkeeping after inserting a new two-qubit gate.
 
@@ -212,15 +212,6 @@ def update_locked_gates_on_insert(
         if old_two_q_map[old_idx] == inserted_pair:
             inserted_occurrence += 1
 
-    new_two_q_map: TwoQMap = {}
-    for old_idx, old_pair in old_two_q_map.items():
-        if old_idx >= circ_ind:
-            new_two_q_map[old_idx + 1] = old_pair
-        else:
-            new_two_q_map[old_idx] = old_pair
-
-    new_two_q_map[circ_ind] = inserted_pair
-
     new_locked_gates: set[LockId] = set()
     for old_occurrence, old_pair in locked_gates:
         if old_pair != inserted_pair:
@@ -231,17 +222,15 @@ def update_locked_gates_on_insert(
             else:
                 new_locked_gates.add((old_occurrence, old_pair))
 
-    logger.info("Updated 2Q positions after insertion: %s", new_two_q_map)
     logger.info("Updated locked gates after insertion: %s", new_locked_gates)
 
-    return dict(sorted(new_two_q_map.items())), new_locked_gates
-
+    return new_locked_gates
 
 def update_locked_gates_on_removal(
     circ_ind: int,
     old_two_q_map: TwoQMap,
     locked_gates: set[LockId],
-) -> tuple[TwoQMap, set[LockId]]:
+) -> set[LockId]:
     """
     Update two-qubit bookkeeping after removing an unlocked two-qubit gate.
 
@@ -274,15 +263,6 @@ def update_locked_gates_on_removal(
             f"Attempted to remove locked two-qubit gate at circuit index {circ_ind}."
         )
 
-    new_two_q_map: TwoQMap = {}
-    for old_idx, old_pair in old_two_q_map.items():
-        if old_idx == circ_ind:
-            continue
-        if old_idx > circ_ind:
-            new_two_q_map[old_idx - 1] = old_pair
-        else:
-            new_two_q_map[old_idx] = old_pair
-
     new_locked_gates: set[LockId] = set()
     for old_occurrence, old_pair in locked_gates:
         if old_pair != removed_pair:
@@ -293,10 +273,9 @@ def update_locked_gates_on_removal(
             else:
                 new_locked_gates.add((old_occurrence, old_pair))
 
-    logger.info("Updated 2Q positions after removal: %s", new_two_q_map)
     logger.info("Updated locked gates after removal: %s", new_locked_gates)
 
-    return dict(sorted(new_two_q_map.items())), new_locked_gates
+    return new_locked_gates
 
 def get_two_qubit_gate_offsets(circuit: QuantumCircuit) -> list[int]:
     """
@@ -353,11 +332,11 @@ def update_locked_gates_on_multiple_inserts(
     new_locked_gates = set(locked_gates)
 
     for circ_ind in sorted(inserted_indices):
-        new_two_q_map, new_locked_gates = update_locked_gates_on_insert(
+        new_locked_gates = update_locked_gates_on_insert(
             circuit=circuit,
             circ_ind=circ_ind,
             old_two_q_map=new_two_q_map,
             locked_gates=new_locked_gates,
         )
-
-    return new_two_q_map, new_locked_gates
+    
+    return new_locked_gates
