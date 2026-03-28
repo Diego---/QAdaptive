@@ -126,6 +126,25 @@ class MutableAnsatzExperiment:
         """
         
         self.trainer.set_optimizer(optimizer=optimizer, optimizer_options=optimizer_options)
+        
+    def reset_optimizer_callback(
+        self,
+        callback: CALLBACK
+        ) -> None:
+        """
+        Set a callback function to be called at each iteration of the optimizer.
+        Parameters
+        ----------
+        callback : CALLBACK
+            A function with signature ``callback(iteration, params, cost, grad, accepted)``
+            that will be called at each iteration of the optimizer. The parameters are:
+                - eval_count: number of cost function evaluations
+                - parameters: the current parameter vector
+                - mean: the current cost function value
+                - stp_size: step size used for the parameter update
+                - accepted: whether the last parameter update was accepted by the optimizer
+        """
+        self.trainer.optimizer.callback = callback
 
     def get_gradients(self) -> np.ndarray:
         """
