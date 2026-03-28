@@ -18,7 +18,8 @@ from qadaptive.mutation import (
     update_locked_gates_on_insert,
     update_locked_gates_on_removal,
     get_two_qubit_gate_offsets,
-    update_locked_gates_on_multiple_inserts
+    update_locked_gates_on_multiple_inserts,
+    TwoQMap,
 )
 from qadaptive.simplification import simplify_ansatz
 from qadaptive.pruning import evaluate_two_qubit_gate_pruning
@@ -209,7 +210,7 @@ class MutableAnsatzExperiment:
 
         Returns
         -------
-        dict[int, tuple[int, int]]
+        TwoQMap
             Dictionary whose keys are circuit-data indices and whose values are
             the corresponding two-qubit gate qubit pairs.
         """
@@ -218,7 +219,7 @@ class MutableAnsatzExperiment:
     def _get_pair_occurrence_from_circuit_index(
         self,
         circ_index: int,
-        two_q_map: dict[int, tuple[int, int]] | None = None,
+        two_q_map: TwoQMap | None = None,
     ) -> tuple[int, tuple[int, int]]:
         """
         Return the pair occurrence index and qubit pair for a two-qubit gate
@@ -228,7 +229,7 @@ class MutableAnsatzExperiment:
         ----------
         circ_index : int
             Circuit-data index of the two-qubit gate.
-        two_q_map : dict[int, tuple[int, int]] | None, optional
+        two_q_map : TwoQMap | None, optional
             Mapping from circuit-data indices to qubit pairs. If None,
             `self._2qbg_positions` is used.
 
@@ -253,7 +254,7 @@ class MutableAnsatzExperiment:
         self,
         occurrence: int,
         pair: tuple[int, int],
-        two_q_map: dict[int, tuple[int, int]] | None = None,
+        two_q_map: TwoQMap | None = None,
     ) -> int | None:
         """
         Return the circuit-data index of the two-qubit gate identified by its
@@ -266,7 +267,7 @@ class MutableAnsatzExperiment:
             second two-qubit gate acting on `pair`.
         pair : tuple[int, int]
             Qubit pair identifying the gate.
-        two_q_map : dict[int, tuple[int, int]] | None, optional
+        two_q_map : TwoQMap | None, optional
             Mapping from circuit-data indices to qubit pairs. If None,
             `self._2qbg_positions` is used.
 
