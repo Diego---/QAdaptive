@@ -164,10 +164,6 @@ class MutableAnsatzExperiment:
         """
         self.adaptive_ansatz.update_params()
     
-    def _update_ansatz(self) -> None:
-        """Update the ansatz attribute."""
-        self.ansatz = self.adaptive_ansatz.get_current_ansatz()
-        self._update_params()
 
     def _update_locked_gates_on_insert(self, circ_ind: int) -> None:
         """
@@ -186,13 +182,13 @@ class MutableAnsatzExperiment:
         """
         old_two_q_map = dict(self._2qbg_positions)
 
-        self._2qbg_positions, self.locked_gates = update_locked_gates_on_insert(
+        self.locked_gates = update_locked_gates_on_insert(
             circuit=self.adaptive_ansatz.current_ansatz,
             circ_ind=circ_ind,
             old_two_q_map=old_two_q_map,
             locked_gates=self.locked_gates,
         )
-
+        
     def _update_locked_gates_on_removal(self, circ_ind: int) -> None:
         """
         Update `_2qbg_positions` and `locked_gates` after removing an unlocked
@@ -213,13 +209,13 @@ class MutableAnsatzExperiment:
         """
         old_two_q_map = dict(self._2qbg_positions)
 
-        self._2qbg_positions, self.locked_gates = update_locked_gates_on_removal(
+        self.locked_gates = update_locked_gates_on_removal(
             circ_ind=circ_ind,
             old_two_q_map=old_two_q_map,
             locked_gates=self.locked_gates,
         )
-        
-    def _get_two_qubit_gate_indices(self) -> dict[int, tuple[int, int]]:
+                
+    def _get_two_qubit_gate_indices(self) -> TwoQMap:
         """
         Return a mapping from circuit-data indices to the qubit pairs acted on by
         two-qubit gates in the current ansatz.
@@ -352,6 +348,11 @@ class MutableAnsatzExperiment:
             gates that still exist in the current ansatz.
         """
         return get_locked_circuit_indices(self._2qbg_positions, self.locked_gates)
+
+    def _update_ansatz(self) -> None:
+        """Update the ansatz attribute."""
+        self.ansatz = self.adaptive_ansatz.get_current_ansatz()
+        self._update_params()
     
     def _sync_after_ansatz_change(self, reset_locked_gates: bool = False) -> None:
         """
@@ -442,10 +443,11 @@ class MutableAnsatzExperiment:
         """
         gate_name, qubits, index = self.adaptive_ansatz.add_random_gate()
         logger.info(f"Inserted {gate_name} gate on qubits {qubits} at position {index}.")
+        
+        self._sync_after_ansatz_change()
         if len(qubits) == 2:
             self._update_locked_gates_on_insert(index)
-        
-        self._update_ansatz()
+            logger.info("Updated 2Q positions after insertion: %s", self._2qbg_positions)
                     
     def insert_at(
         self, gate: str, qubits: list[int], circ_ind: int
@@ -468,13 +470,11 @@ class MutableAnsatzExperiment:
         )
         self.adaptive_ansatz.add_gate_at_index(gate, circ_ind, qubits)
         logger.info(f"Inserted {gate} gate on qubits {qubits} at position {circ_ind}.")
-        logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
-        
-        # If a 2-qubit gate is added, update _2qbg_positions and locked_gates
+            
+        self._sync_after_ansatz_change()
         if len(qubits) == 2:
             self._update_locked_gates_on_insert(circ_ind)
-            
-        self._update_ansatz()
+            logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
 
     def remove_at(
         self, circ_ind: int
@@ -501,14 +501,12 @@ class MutableAnsatzExperiment:
                 )
                 return
             
-        # Remove from ansatz first.
         self.adaptive_ansatz.remove_gate_by_index(circ_ind)
         
-        # Update bookkeeping for 2Q-gate removal.
+        self._sync_after_ansatz_change()
         if is_2qbg:
             self._update_locked_gates_on_removal(circ_ind)
-        
-        self._update_ansatz()
+            logger.info("Updated 2Q positions after removal: %s", self._2qbg_positions)
         
     def insert_block_at(
         self,
@@ -566,14 +564,15 @@ class MutableAnsatzExperiment:
         if two_q_offsets:
             inserted_two_q_indices = [circ_ind + offset for offset in two_q_offsets]
 
-            self._2qbg_positions, self.locked_gates = update_locked_gates_on_multiple_inserts(
+            self.locked_gates = update_locked_gates_on_multiple_inserts(
                 circuit=self.adaptive_ansatz.current_ansatz,
                 inserted_indices=inserted_two_q_indices,
                 old_two_q_map=old_two_q_map,
                 locked_gates=self.locked_gates,
             )
 
-        self._update_ansatz()
+        self._sync_after_ansatz_change()
+        logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
 
     def simplify_transpiler_passes(
         self,
@@ -670,15 +669,16 @@ class MutableAnsatzExperiment:
         assert decision.gate_to_remove is not None
 
         if decision.accepted:
-            self.adaptive_ansatz.update_ansatz(decision.trial_ansatz)
             self._update_locked_gates_on_removal(decision.gate_to_remove)
-            self._update_ansatz()
-
+            self.adaptive_ansatz.update_ansatz(decision.trial_ansatz)
+            self._sync_after_ansatz_change()
             self.trainer.update_last_evaluation(cost=decision.trial_cost)
             return
 
         if decision.should_lock:
             self._lock_circuit_index(decision.gate_to_remove)
+
+        logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
         
     def get_current_parameters(self) -> list[Parameter]:
         return self.adaptive_ansatz.get_current_ansatz().parameters
