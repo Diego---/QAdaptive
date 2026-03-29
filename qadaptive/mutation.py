@@ -303,7 +303,7 @@ def update_locked_gates_on_multiple_inserts(
     inserted_indices: list[int],
     old_two_q_map: TwoQMap,
     locked_gates: set[LockId],
-) -> tuple[TwoQMap, set[LockId]]:
+) -> set[LockId]:
     """
     Update two-qubit bookkeeping after inserting multiple two-qubit gates.
 
