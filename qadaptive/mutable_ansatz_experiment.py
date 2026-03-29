@@ -157,17 +157,19 @@ class MutableAnsatzExperiment:
         """
         self.trainer.optimizer.last_iteration = iteration
 
-    def get_gradients(self) -> np.ndarray:
+    def get_latest_gradients(self) -> np.ndarray:
         """
-        Get gradients of the cost function with respect to ansatz parameters.
+        Get the latest gradient values from the optimizer's history.
 
         Returns
         -------
         np.ndarray
-            The current estimated gradient values.
+            The last gradient vector recorded by the optimizer, or an empty array if no gradients are available.
         """
-        # Placeholder for actual gradient computation
-        return np.random.randn(len(self.adaptive_ansatz.param_vector))
+        return (
+            self.gradient_history[-1] if self.gradient_history 
+            is not None and len(self.gradient_history) > 0 else np.array([])
+        )
 
     def _update_params(self):
         """
