@@ -24,7 +24,12 @@ simple_trainer = InnerLoopTrainer(SPSA())
 def test_muable_optimizer_initialization():
     """Test that MutableOptimizer correctly initializes."""
     mo = MutableAnsatzExperiment(simple_ansatz, simple_trainer)
+    assert isinstance(mo, MutableAnsatzExperiment)
+    assert isinstance(mo.trainer, InnerLoopTrainer)
     assert isinstance(mo.ansatz, QuantumCircuit)
+
+def operation_names(circuit: QuantumCircuit) -> list[str]:
+    return [inst.operation.name for inst in circuit.data]
 
 def test_insert_at():
     mo = MutableAnsatzExperiment(simple_ansatz, simple_trainer)
@@ -40,6 +45,33 @@ def test_insert_at():
         mo.insert_at('h', [0], 0)
 
     assert len(mo.ansatz.data) > len(tiny_ansatz.data)
+    
+def test_mutable_ansatz_experiment_copies_input_ansatz_before_mutation():
+    adaptive = simple_ansatz.copy()
+    original_ops = operation_names(adaptive.current_ansatz)
+
+    experiment = MutableAnsatzExperiment(adaptive, simple_trainer)
+    experiment.insert_at("rx", [0], 0)
+
+    assert operation_names(adaptive.current_ansatz) == original_ops
+    assert len(experiment.ansatz.data) == len(adaptive.current_ansatz.data) + 1
+    
+def test_insert_block_at_rejects_wrong_qubit_count():
+    ansatz = simple_ansatz.copy()
+    experiment = MutableAnsatzExperiment(ansatz, simple_trainer)
+
+    with pytest.raises(ValueError):
+        experiment.insert_block_at("cx_identity", [0], 0)
+        
+def test_lock_gates_marks_requested_two_qubit_gates():
+    ansatz = simple_ansatz.copy()
+    experiment = MutableAnsatzExperiment(ansatz, simple_trainer)
+    two_q_indices = sorted(experiment._2qbg_positions)
+
+    experiment.lock_gates([two_q_indices[0]])
+
+    assert experiment._is_locked_circuit_index(two_q_indices[0])
+    assert experiment._get_locked_circuit_indices() == [two_q_indices[0]]
 
 def test_insert_random():
     pass

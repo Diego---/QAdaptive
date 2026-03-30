@@ -1,4 +1,4 @@
-import pytest
+import pytest, random
 import numpy as np
 
 from qiskit.circuit import QuantumCircuit, ParameterVector
@@ -356,3 +356,105 @@ def test_cx_identity_block_is_identity_at_zero():
     bound = block.assign_parameters(zero_map)
 
     assert Operator(bound).equiv(Operator(QuantumCircuit(2)))
+
+# -----------------------------------------------------------------------------
+# Additional tests
+# -----------------------------------------------------------------------------
+
+def operation_names(circuit: QuantumCircuit) -> list[str]:
+    return [inst.operation.name for inst in circuit.data]
+
+
+
+def test_initialization_removes_barriers_and_renames_parameters_in_order():
+    th = ParameterVector("t", 2)
+    qc = QuantumCircuit(1)
+    qc.rx(th[1], 0)
+    qc.barrier()
+    qc.rz(th[0], 0)
+
+    adaptive = AdaptiveAnsatz(qc)
+
+    assert operation_names(adaptive.current_ansatz) == ["rx", "rz"]
+    assert [p.name for p in adaptive.current_ansatz.parameters] == ["θ_0", "θ_1"]
+    assert [p.name for p in adaptive.params] == ["θ_0", "θ_1"]
+
+
+
+def test_copy_is_independent_from_original():
+    qc = QuantumCircuit(1)
+    adaptive = AdaptiveAnsatz(qc, block_pool=DEFAULT_BLOCK_POOL)
+    copied = adaptive.copy()
+
+    copied.add_gate_at_index("rx", 0, [0])
+    copied.add_block_at_index("rz_rx_rz", 1, [0])
+
+    assert len(adaptive.current_ansatz.data) == 0
+    assert len(adaptive.params) == 0
+    assert len(copied.current_ansatz.data) == 4
+    assert len(copied.params) == 4
+
+
+
+def test_add_random_gate_uses_operator_pool_and_updates_history(monkeypatch):
+    qc = QuantumCircuit(2)
+    adaptive = AdaptiveAnsatz(qc, track_history=True, operator_pool=["cz"])
+
+    monkeypatch.setattr(random, "randint", lambda a, b: 0)
+    monkeypatch.setattr(random, "choice", lambda seq: "cz")
+    monkeypatch.setattr(random, "sample", lambda population, k: list(population[:k]))
+
+    gate_name, qubits, index = adaptive.add_random_gate()
+
+    assert gate_name == "cz"
+    assert index == 0
+    assert len(qubits) == 2
+    assert operation_names(adaptive.current_ansatz) == ["cz"]
+    assert len(adaptive.history) == 2
+
+
+
+def test_add_random_block_uses_block_pool_and_updates_history(monkeypatch):
+    qc = QuantumCircuit(2)
+    adaptive = AdaptiveAnsatz(qc, track_history=True, block_pool=DEFAULT_BLOCK_POOL)
+
+    monkeypatch.setattr(random, "randint", lambda a, b: 0)
+    monkeypatch.setattr(random, "choice", lambda seq: "cz_identity")
+    monkeypatch.setattr(random, "sample", lambda population, k: list(population[:k]))
+
+    block_name, qubits, index = adaptive.add_random_block()
+
+    assert block_name == "cz_identity"
+    assert index == 0
+    assert len(qubits) == 2
+    assert operation_names(adaptive.current_ansatz) == ["cz", "ry", "rx", "cz", "ry", "rx"]
+    assert len(adaptive.params) == 4
+    assert len(adaptive.history) == 2
+
+
+
+def test_remove_gate_by_index_raises_for_out_of_range_index():
+    qc = QuantumCircuit(1)
+    qc.rx(0.1, 0)
+    adaptive = AdaptiveAnsatz(qc)
+
+    with pytest.raises(IndexError):
+        adaptive.remove_gate_by_index(1)
+
+
+
+def test_add_block_at_index_raises_for_out_of_range_index():
+    qc = QuantumCircuit(2)
+    adaptive = AdaptiveAnsatz(qc, block_pool=DEFAULT_BLOCK_POOL)
+
+    with pytest.raises(IndexError):
+        adaptive.add_block_at_index("cx_identity", 1, [0, 1])
+
+
+
+def test_rollback_raises_when_history_is_insufficient():
+    qc = QuantumCircuit(1)
+    adaptive = AdaptiveAnsatz(qc, track_history=True)
+
+    with pytest.raises(ValueError):
+        adaptive.rollback(1)
