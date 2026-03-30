@@ -1,21 +1,19 @@
 from qiskit.circuit.library import RZGate, RXGate, RYGate
-from qiskit.circuit import QuantumCircuit, ParameterVector, Parameter
+from qiskit.circuit import QuantumCircuit, Parameter
 from qiskit.dagcircuit import DAGCircuit, DAGInNode, DAGOpNode, DAGOutNode
 from qiskit.transpiler import PassManager
 from qiskit.transpiler.basepasses import TransformationPass
 from qiskit.transpiler.passes import CommutativeCancellation, CommutativeInverseCancellation
-from qiskit.converters import circuit_to_dag, dag_to_circuit
+from qiskit.converters import circuit_to_dag
 
-class RemoveUnnecessaryControlledGates(TransformationPass):
+class RemoveInputControlledGates(TransformationPass):
     """
     A transpiler pass to remove unnecessary controlled gates from a DAGCircuit.
 
     This pass identifies controlled gates (multi-qubit gates) that have no dependencies
     (i.e., their predecessors are all input nodes) and removes them from the circuit.
     """
-
-    # TODO: Remove only if controll qubit is an input node for gates such as CX, 
-    # but remove only if both qubits are inputs for gates such as CZ.
+    
     def run(self, dag: DAGCircuit) -> DAGCircuit:
         """
         Run the pass on the DAGCircuit.
@@ -193,14 +191,47 @@ class ReplaceConsecutiveRotationsWithRxRyRx(TransformationPass):
                         dag.substitute_node_with_dag(remaining_node, replacement_dag)
                         
         return dag
-    
-custom_pass_manager = PassManager([
-    CommutativeCancellation(),
-    RemoveInitialRZ(),
-    RemoveFinalRZ(),
-    RemoveUnnecessaryControlledGates(),
-    MergeConsecutiveRotations(),
-    ReplaceConsecutiveRotationsWithRxRyRx(),
-    CommutativeCancellation(),
-    CommutativeInverseCancellation(),
-])
+
+def custom_pass_manager(
+    remove_initial_rz: bool = False,
+    remove_final_rz: bool = False,
+    remove_input_controlled_gates: bool = False,
+) -> PassManager:
+    """
+    Create a custom PassManager with a configurable sequence of transpilation passes.
+
+    Parameters
+    ----------
+    remove_initial_rz : bool, optional
+        Whether to include the pass that removes initial RZ gates.
+    remove_final_rz : bool, optional
+        Whether to include the pass that removes final RZ gates.
+    remove_input_controlled_gates : bool, optional
+        Whether to include the pass that removes unnecessary controlled gates.
+
+    Returns
+    -------
+    PassManager
+        The custom PassManager with the selected sequence of passes.
+    """
+    passes = [
+        CommutativeCancellation(),
+    ]
+
+    if remove_initial_rz:
+        passes.append(RemoveInitialRZ())
+
+    if remove_final_rz:
+        passes.append(RemoveFinalRZ())
+
+    if remove_input_controlled_gates:
+        passes.append(RemoveInputControlledGates())
+
+    passes.extend([
+        MergeConsecutiveRotations(),
+        ReplaceConsecutiveRotationsWithRxRyRx(),
+        CommutativeCancellation(),
+        CommutativeInverseCancellation(),
+    ])
+
+    return PassManager(passes)

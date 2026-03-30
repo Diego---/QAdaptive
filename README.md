@@ -1,22 +1,76 @@
 # QAdaptive
 
-QAdaptive is an experimental Python package for building and training **adaptive variational quantum circuits** on top of Qiskit.
+QAdaptive is an experimental Python package for building and training **adaptive variational quantum circuits** on top of **Qiskit**.
+
+The project is motivated by **variable-structure ansatz** methods such as VAns / QVANS: instead of fixing a circuit architecture in advance, the ansatz can be **modified during optimization** by inserting, removing, simplifying, and pruning gates or blocks.
+
+The current focus of the package is the **mutable ansatz** and the infrastructure needed to support adaptive training loops.
+
+---
 
 ## Current Status (March 2026)
 
-The project is in an early, actively developed state.
+The project is in an early, actively developed state. At the moment, the package already supports the core ingredients required for adaptive ansatz experiments:
+
 
 Implemented:
-- `AdaptiveAnsatz` supports:
-  - inserting/removing gates at explicit indices,
-  - inserting parameterized blocks,
-  - random gate/block insertion,
-  - parameter tracking,
-  - optional history tracking + rollback.
-- `PoolBlock` and a default block pool (`rz_rx_rz`, `cx_identity`).
-- `MutableAnsatzExperiment` is a class for iterative training of a mutable ansatz.
-- Custom transpiler/simplification pass manager in `qadaptive/utils.py`.
-- Unit tests for core `AdaptiveAnsatz` behavior and part of `MutableAnsatzExperiment` insertion behavior.
+- `AdaptiveAnsatz`
+  - wraps a parameterized `QuantumCircuit`,
+  - tracks trainable parameters,
+  - supports insertion and removal of gates and blocks,
+  - supports random insertion from an operator pool,
+  - can optionally track ansatz history,
+  - supports rollback to previous circuit states.
+
+- Mutation / bookkeeping utilities
+  - updating parameter bookkeeping after structural changes,
+  - tracking two-qubit gate positions,
+  - handling locked gates,
+  - infrastructure for preserving structural consistency across insertions and removals.
+
+- Simplification / transpilation tools
+  - custom simplification passes,
+  - custom pass manager construction,
+  - passes for removing trivial leading/trailing structure and merging reducible rotations.
+
+- Training infrastructure
+  - `InnerLoopTrainer` for running parameter optimization on a fixed mutable ansatz state,
+  - `MutableAnsatzExperiment` for coupling the ansatz object to an optimizer/trainer workflow,
+  - support for gradient-aware training workflows.
+
+- Optimizer integration
+  - works with a modified SPSA implementation,
+  - supports power-series hyperparameter setup.
+
+### Not Yet Stable
+
+The public API is still evolving. In particular, the following areas should still be considered unstable:
+
+- locked-gate bookkeeping,
+- two-qubit gate remapping after structural edits,
+- simplification/transpilation interactions with internal bookkeeping,
+- higher-level application wrappers.
+
+---
+
+## Design Philosophy
+
+QAdaptive separates the problem into three layers:
+
+1. **Mutable circuit object**  
+   The ansatz itself, including circuit structure, parameters, history, and mutation methods.
+
+2. **Inner-loop training**  
+   Parameter optimization for a fixed ansatz instance.
+
+3. **Application / cost-function layer**  
+   Problem-specific composition and evaluation, such as:
+   - expectation values for VQE,
+   - classification losses for QNNs,
+   - compression / reconstruction losses for QAEs.
+
+This means that the mutable ansatz is intended to remain **problem-agnostic**.  
+Task-specific composition of circuits should be handled by the **loss function** or a future **application wrapper**, rather than by the ansatz object itself.
 
 ## Compatibility Notes
 
@@ -104,32 +158,95 @@ adaptive.rollback(1)
 ### 2) Use the mutable experiment wrapper
 
 ```python
-from qadaptive import AdaptiveAnsatz, MutableAnsatzExperiment
+import numpy as np
+
 from qiskit import QuantumCircuit
 
-qc = QuantumCircuit(2)
-adaptive = AdaptiveAnsatz(qc)
-exp = MutableAnsatzExperiment(adaptive_ansatz=adaptive)
+from qadaptive import AdaptiveAnsatz
+from qadaptive.trainer import InnerLoopTrainer
+from qadaptive.mutable_ansatz_experiment import MutableAnsatzExperiment
+from qadaptive.utils import custom_pass_manager
+from your_optimizer_module import SPSA
 
-# Structural edits from the experiment API
-exp.insert_at("rx", [0], 0)
-exp.insert_block_at("rz_rx_rz", [0], 1)
+# Example: create a starting ansatz
+adaptive_ansatz = AdaptiveAnsatz(QuantumCircuit(2))
+
+# Optimizer
+spsa_mutable = SPSA(
+    maxiter=100,
+    callback=store_results,
+    resamplings=resample,
+)
+
+spsa_mutable.set_power_series_hyperparameters(**hyperparams)
+
+# Trainer
+trainer = InnerLoopTrainer(
+    optimizer=spsa_mutable,
+    track_gradients=True,
+)
+
+# Optional pass manager
+pass_manager = custom_pass_manager(
+    remove_initial_rz=True,
+    remove_input_controlled_gates=True,
+)
+
+# Mutable experiment
+mo = MutableAnsatzExperiment(
+    adaptive_ansatz=adaptive_ansatz,
+    trainer=trainer,
+)
+
+# Initial point
+random_initial_point = np.random.choice([-1, 1], size=mo.ansatz.num_parameters)
+
+# Train once against a user-defined loss function
+mo.train_one_time(
+    loss_function=energy_function,
+    initial_point=random_initial_point,
+    iterations=100,
+)
 ```
 
 Note: full training paths currently rely on a compatible optimizer API (notably the external SPSA implementation referenced above).
 
 ## Project Layout
 
-- `qadaptive/adaptive_ansatz.py`: mutable ansatz container and edit operations.
+- `qadaptive/__init__.py`: package exports and top-level import surface.
+- `qadaptive/adaptive_ansatz.py`: core mutable ansatz container and structural edit operations.
+- `qadaptive/applications.py`: task-level application helpers and abstractions for problem-specific workflows.
 - `qadaptive/mutable_ansatz_experiment.py`: training loop + structure adaptation orchestration.
-- `qadaptive/operator_pool.py`: parameterized block definitions and default pool.
-- `qadaptive/utils.py`: transpiler passes and custom pass manager.
+- `qadaptive/mutation.py`: low-level mutation utilities and bookkeeping updates for insertions/removals.
+- `qadaptive/operator_pool.py`: parameterized block definitions and default operator pool.
+- `qadaptive/pruning.py`: utilities for pruning or removing low-impact circuit structure.
+- `qadaptive/simplification.py`: circuit simplification logic and rewrite rules.
+- `qadaptive/trainer.py`: inner-loop optimization/training infrastructure for fixed ansatz states.
+- `qadaptive/utils.py`: shared utilities, including transpiler passes and custom pass manager construction.
 - `qadaptive/tests/`: unit tests.
 
-## Contributing / Next Priorities
+### Notes on module roles
 
-High-impact next steps:
-- implement and test `remove_random_gate`,
-- formalize optimizer interface and remove hard dependency on external `qae` path,
-- complete utility-pass tests,
-- add CI with a pinned modern Python/Qiskit matrix.
+- **Core ansatz state**
+  - `adaptive_ansatz.py` holds the mutable circuit object itself: circuit data, parameters, history, rollback, and user-facing edit methods.
+
+- **Structure updates**
+  - `mutation.py` contains the lower-level logic that keeps internal bookkeeping consistent when the circuit changes, especially around parameter tracking, two-qubit gate positions, and locked gates.
+
+- **Growth primitives**
+  - `operator_pool.py` defines the building blocks that can be inserted into the ansatz, such as parameterized single-qubit or two-qubit blocks.
+
+- **Reduction / cleanup**
+  - `simplification.py` handles deterministic cleanup of redundant structure.
+  - `pruning.py` is the natural place for cost-aware removal of gates or blocks judged to be unimportant.
+
+- **Training**
+  - `trainer.py` handles parameter optimization for a fixed circuit structure.
+  - `mutable_ansatz_experiment.py` sits one level above that and coordinates optimization together with ansatz mutation.
+
+- **Applications**
+  - `applications.py` is intended for problem-specific composition, such as VQE, QNN, or QAE workflows, where the mutable ansatz may be prepended or appended to other circuits.
+
+- **Utilities**
+  - `utils.py` contains shared helpers that do not belong cleanly to a single module, including transpilation-related helpers and pass-manager setup.
+

@@ -292,9 +292,11 @@ class AdaptiveAnsatz:
         indices.sort(reverse=True)
         
         removed_param_names = set()
+        removed_operations = []
         
         for index in indices:
             operation = self.current_ansatz.data[index].operation
+            removed_operations.append(operation)
             
             for param in operation.params:
                 # Case 1: plain Parameter
@@ -309,7 +311,7 @@ class AdaptiveAnsatz:
             # Remove the gate from the circuit
             del self.current_ansatz.data[index]
             
-        
+        logger.info("Removed gates at indices %s, corresponding to operations %s.", indices, removed_operations)
         # Update parameters
         self.update_params()
         # Save state if tracking history
@@ -378,3 +380,27 @@ class AdaptiveAnsatz:
             list(self.current_ansatz.parameters),
             key=lambda p: int(p.name.split("_")[1])
     )
+
+    def copy(self) -> "AdaptiveAnsatz":
+        """
+        Return a deep copy of the AdaptiveAnsatz.
+
+        Returns
+        -------
+        AdaptiveAnsatz
+            Independent copy of the current adaptive ansatz object.
+        """
+        new_obj = AdaptiveAnsatz(
+            initial_ansatz=self.current_ansatz.copy(),
+            track_history=self.track_history,
+            operator_pool=list(self.operator_pool),
+            block_pool=dict(self.block_pool),
+        )
+
+        # Preserve history independently.
+        if self.track_history:
+            new_obj.history = [qc.copy() for qc in self.history]
+        else:
+            new_obj.history = []
+
+        return new_obj
