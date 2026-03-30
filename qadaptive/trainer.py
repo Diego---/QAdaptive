@@ -52,9 +52,8 @@ class InnerLoopTrainer:
         termination_checker: TERMINATIONCHECKER | None = None,
     ) -> None:
         assert (
-            not (optimizer is None and optimizer_options is None), 
-            "Provide at least a pre-initialized optimizer or options to initialize a new one."
-        )
+            optimizer is not None or optimizer_options is not None
+        ), "Provide at least a pre-initialized optimizer or options to initialize a new one."
         self.optimizer = optimizer if optimizer is not None else SPSA(**optimizer_options)
         self.track_gradients = track_gradients
 
