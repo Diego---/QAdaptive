@@ -33,27 +33,40 @@ class MutableAnsatzExperiment:
     """
     An experiment in which an ansatz is dynamically modified while training.
 
-    This class tracks gradients, updates parameters, and applies pruning or growth
-    strategies based on optimization performance.
+    This class wraps an `AdaptiveAnsatz` together with an `InnerLoopTrainer` and
+    provides utilities for alternating between inner-loop parameter training and
+    outer-loop structural updates such as gate insertion, block insertion,
+    simplification, and pruning.
     
     Attributes
     ----------
-    ansatz : AdaptiveAnsatz
-        The adaptive ansatz to be optimized.
+    adaptive_ansatz : AdaptiveAnsatz
+        Copy of the adaptive ansatz object managed by the experiment.
+    ansatz : QuantumCircuit
+        Current circuit representation of `adaptive_ansatz`.
+    trainer : InnerLoopTrainer
+        Inner-loop trainer responsible for parameter optimization and tracking
+        optimizer-side state.
+    cost_history : list[OptimizerResult] | None
+        History of optimization results returned by the trainer after each
+        `train_one_time` call, if tracking is enabled; otherwise None.
+        _outer_iteration : int
+        Internal counter for outer-loop structural updates.
+    _2qbg_positions : TwoQMap
+        Mapping from circuit-data indices of two-qubit gates to the qubit pairs
+        they act on.
+    locked_gates : set[LockId]
+        Set of locked two-qubit gate identifiers used to prevent removal of
+        selected gates during pruning.
     optimizer : Optimizer
-        The classical optimizer object (e.g., SPSA, Adam). Defaults to qae's SPSA if None.
-    track_gradients : bool
-        Indicates whether gradient history is being tracked.
-    gradient_history : list or None
-        Stores the gradients at each iteration if `track_gradients` is True; otherwise `None`.
-    iteration : int
-        The current iteration number in the optimization process.
-    callback : CALLBACK or None
-        A function called at each iteration step with optimization info.
-    termination_checker : TERMINATIONCHECKER or None
-        A function executed at the end of each iteration to determine if optimization should terminate.
-    _inner_iteration : int
-        Internal counter for the current iteration (used internally by the optimizer).
+        Optimizer currently used by the inner-loop trainer. Exposed as a property.
+    gradient_history : list[np.ndarray] | None
+        Gradient estimates stored by the trainer if gradient tracking is enabled;
+        otherwise None. Exposed as a property.
+    last_cost : float | None
+        Most recent cost value stored by the trainer. Exposed as a property.
+    last_params : np.ndarray | None
+        Most recent parameter vector stored by the trainer. Exposed as a property.
     """
 
     def __init__(
@@ -67,7 +80,7 @@ class MutableAnsatzExperiment:
 
         Parameters
         ----------
-        ansatz : AdaptiveAnsatz
+        adaptive_ansatz : AdaptiveAnsatz
             The adaptive ansatz to be optimized.
         trainer : InnerLoopTrainer
             An inner loop trainer object that handles the inner optimization.
