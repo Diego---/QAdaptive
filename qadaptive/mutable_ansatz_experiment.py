@@ -188,6 +188,14 @@ class MutableAnsatzExperiment:
         Most recent cost value stored by the trainer. Exposed as a property.
     last_params : np.ndarray | None
         Most recent parameter vector stored by the trainer. Exposed as a property.
+    parameter_memory : dict[str, float]
+        Persistent mapping from parameter names to their most recently accepted
+        numerical values.
+    parameter_memory_history :list[ParameterMemoryRecord]
+        History of `parameter_memory` snapshots taken after each training run.
+    outer_step_history : list[OuterStepResult]
+        History of outer-loop step results summarizing the structural updates
+        attempted throughout the experiment.
     """
 
     def __init__(
@@ -221,6 +229,9 @@ class MutableAnsatzExperiment:
         # Since the ansatz will be constantly changing, this is tracked by looking at the
         # n'th two qubit gate and the qubits it acts on. No gate is locked by default.
         self.locked_gates = set()
+        self.parameter_memory: dict[str, float] = {}
+        self.parameter_memory_history: list[ParameterMemoryRecord] = []
+        self.outer_step_history: list[OuterStepResult] = []
         
     def set_optimizer(
         self, optimizer: Optimizer | None = None, optimizer_options: dict | None = None
