@@ -25,6 +25,16 @@ from qadaptive.mutation import (
 )
 from qadaptive.simplification import simplify_ansatz
 from qadaptive.pruning import evaluate_two_qubit_gate_pruning
+from qadaptive.action_definitions import (
+    ACTION_DEFINITIONS,
+    INSERT_RANDOM_GATE,
+    INSERT_GATE,
+    INSERT_BLOCK,
+    REMOVE_GATE,
+    SIMPLIFY,
+    PRUNE_TWO_QUBIT,
+    ActionDefinition
+)
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
@@ -892,6 +902,113 @@ class MutableAnsatzExperiment:
             return float(cost(params_array, ansatz=current_ansatz))
         except TypeError:
             return float(cost(params_array, current_ansatz))
+        
+    def _action_registry(self) -> dict[str, Callable[..., None]]:
+        """Return the mapping from action names to bound action handlers."""
+        return {
+            INSERT_RANDOM_GATE: self._action_insert_random_gate,
+            INSERT_GATE: self._action_insert_gate,
+            INSERT_BLOCK: self._action_insert_block,
+            REMOVE_GATE: self._action_remove_gate,
+            SIMPLIFY: self._action_simplify,
+            PRUNE_TWO_QUBIT: self._action_prune_two_qubit,
+        }
+        
+    def _action_insert_random_gate(self, **kwargs) -> None:
+        """Insert a randomly chosen gate into the current ansatz."""
+        self.insert_random()
+
+    def _action_insert_gate(self, **kwargs) -> None:
+        """Insert a specified gate at a given circuit index."""
+        self.insert_at(
+            gate=kwargs["gate"],
+            qubits=kwargs["qubits"],
+            circ_ind=kwargs["circ_ind"],
+        )
+
+    def _action_insert_block(self, **kwargs) -> None:
+        """Insert a specified block at a given circuit index."""
+        self.insert_block_at(
+            block_name=kwargs["block_name"],
+            qubits=kwargs["qubits"],
+            circ_ind=kwargs["circ_ind"],
+        )
+
+    def _action_remove_gate(self, **kwargs) -> None:
+        """Remove the gate at the specified circuit index."""
+        self.remove_at(circ_ind=kwargs["circ_ind"])
+
+    def _action_simplify(self, **kwargs) -> None:
+        """Simplify the current ansatz with transpiler passes."""
+        self.simplify_transpiler_passes(
+            pass_manager=kwargs.get("pass_manager"),
+            repetitions=kwargs.get("repetitions", 2),
+            reset_locks_on_ambiguity=kwargs.get("reset_locks_on_ambiguity", True),
+        )
+
+    def _action_prune_two_qubit(self, **kwargs) -> None:
+        """Attempt to prune one non-locked two-qubit gate."""
+        self.prune_two_qubit_gate_attempt(
+            cost=kwargs["cost"],
+            temperature=kwargs.get("temperature", 0.08),
+            alpha=kwargs.get("alpha", 0.1),
+            accept_tol=kwargs.get("accept_tol", 0.2),
+        )
+        
+    def _apply_action(
+        self,
+        action: str,
+        cost: Callable[[np.ndarray, QuantumCircuit], float] | None = None,
+        **action_kwargs,
+    ) -> None:
+        """
+        Apply one structural outer-loop action to the current ansatz.
+
+        Parameters
+        ----------
+        action : str
+            Name of the action to apply. Supported actions are:
+            - ``"insert_random_gate"``
+            - ``"insert_gate"``
+            - ``"insert_block"``
+            - ``"remove_gate"``
+            - ``"simplify"``
+            - ``"prune_two_qubit"``
+        cost : Callable[[np.ndarray, QuantumCircuit], float] | None, optional
+            Objective function required by actions that internally evaluate the
+            ansatz, currently ``"prune_two_qubit"``.
+        **action_kwargs
+            Additional keyword arguments forwarded to the selected action.
+
+        Raises
+        ------
+        ValueError
+            If the action name is unknown or if a required argument is missing.
+
+        Notes
+        -----
+        This helper keeps the outer-loop driver logic compact by translating a
+        small action vocabulary into calls to the corresponding structural-update
+        methods of the experiment.
+        """
+        definition = ACTION_DEFINITIONS.get(action)
+        if definition is None:
+            raise ValueError(f"Unknown outer-loop action '{action}'.")
+
+        missing = [key for key in definition.required_kwargs if key not in action_kwargs]
+        if missing:
+            raise ValueError(
+                f"Action '{action}' is missing required kwargs: {missing}."
+            )
+
+        if definition.requires_cost:
+            if cost is None:
+                raise ValueError(f"Action '{action}' requires a `cost` callable.")
+            action_kwargs["cost"] = cost
+
+        registry = self._action_registry()
+        registry[action](**action_kwargs)
+    
     def _snapshot_state(self) -> ExperimentSnapshot:
         """
         Return a snapshot of the current mutable-experiment state.
