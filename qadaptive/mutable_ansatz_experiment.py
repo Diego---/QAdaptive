@@ -1,6 +1,8 @@
+import logging
 import numpy as np
-import logging, random
+
 from typing import Callable, SupportsFloat
+from dataclasses import dataclass
 
 from qiskit.circuit import QuantumCircuit, Parameter
 from qiskit.transpiler import PassManager
@@ -19,7 +21,7 @@ from qadaptive.mutation import (
     update_locked_gates_on_removal,
     get_two_qubit_gate_offsets,
     update_locked_gates_on_multiple_inserts,
-    TwoQMap,
+    TwoQMap, LockId
 )
 from qadaptive.simplification import simplify_ansatz
 from qadaptive.pruning import evaluate_two_qubit_gate_pruning
