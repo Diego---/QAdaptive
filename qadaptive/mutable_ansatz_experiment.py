@@ -321,8 +321,189 @@ class MutableAnsatzExperiment:
         Update ansatz parameters using the optimizer.
         """
         self.adaptive_ansatz.update_params()
-    
+        
+    def _ordered_current_parameters(self) -> list[Parameter]:
+        """
+        Return the current ansatz parameters in optimizer order.
 
+        Returns
+        -------
+        list[Parameter]
+            Ordered list of parameters currently present in the adaptive ansatz.
+
+        Notes
+        -----
+        This helper defines the canonical parameter order used when converting
+        between a name-based parameter memory and the dense parameter vector
+        expected by the inner-loop trainer. The returned order should always match
+        the order assumed by `train_one_time`.
+        """
+        return list(self.adaptive_ansatz.params)
+    
+    def _store_parameter_values(
+        self,
+        values: list[float] | np.ndarray,
+        params: list[Parameter] | None = None,
+    ) -> None:
+        """
+        Store numerical values for a set of parameters in `parameter_memory`.
+
+        Parameters
+        ----------
+        values : list[float] | np.ndarray
+            Numerical parameter values to store.
+        params : list[Parameter] | None, optional
+            Parameters associated with `values`. If `None`, the current ansatz
+            parameters returned by `_ordered_current_parameters` are used.
+
+        Raises
+        ------
+        ValueError
+            If the number of provided values does not match the number of parameters.
+
+        Notes
+        -----
+        This method is typically called after a successful inner-loop optimization
+        run to cache the final trained parameter values. The stored mapping can then
+        be reused to initialize the next training run after a structural ansatz
+        update.
+
+        Examples
+        --------
+        Store the final result of a completed training run:
+
+        >>> result = experiment.train_one_time(loss_function, iterations=100)
+        >>> experiment._store_parameter_values(result.x)
+        or
+        >>> experiment._store_parameter(experiment.last_params)
+        """
+        if params is None:
+            params = self._ordered_current_parameters()
+
+        values = np.asarray(values, dtype=float)
+
+        if len(values) != len(params):
+            raise ValueError(
+                f"Got {len(values)} values for {len(params)} parameters."
+            )
+
+        for param, value in zip(params, values):
+            self.parameter_memory[param.name] = float(value)
+
+    def build_warm_start_initial_point(
+        self,
+        default_value_for_new_params: float = 0.0,
+    ) -> np.ndarray:
+        """
+        Construct an initial parameter vector for the current ansatz from memory.
+
+        Parameters
+        ----------
+        default_value_for_new_params : float, optional
+            Value assigned to parameters that are present in the current ansatz but
+            do not yet appear in `parameter_memory`. This is set to `0.0` by default
+            so that newly inserted gates or blocks start from their identity or
+            neutral initialization.
+
+        Returns
+        -------
+        np.ndarray
+            Initial-point vector ordered according to the current ansatz parameters.
+
+        Notes
+        -----
+        The vector is constructed by matching each current parameter name against
+        `parameter_memory`. Existing parameters inherit their most recently stored
+        values, while new parameters receive `default_value_for_new_params`.
+
+        This method is intended for warm-starting successive inner-loop training
+        runs in the outer adaptive optimization loop.
+
+        Examples
+        --------
+        Build a warm-start vector after inserting a new block:
+
+        >>> x0 = experiment.build_warm_start_initial_point()
+        >>> result = experiment.train_one_time(loss_function, initial_point=x0)
+        """
+        params = self._ordered_current_parameters()
+        return np.asarray(
+            [
+                self.parameter_memory.get(param.name, default_value_for_new_params)
+                for param in params
+            ],
+            dtype=float,
+        )
+        
+    def get_current_parameter_dict(self, default_value_for_new_params: float = 0.0) -> dict[str, float]:
+        """
+        Return the current ansatz parameters as a name-to-value dictionary.
+
+        Parameters
+        ----------
+        default_value_for_new_params : float, optional
+            Value assigned to parameters that are present in the current ansatz but
+            do not yet appear in `parameter_memory`.
+
+        Returns
+        -------
+        dict[str, float]
+            Dictionary whose keys are the names of the parameters currently present
+            in the ansatz and whose values are taken from `parameter_memory` when
+            available, or from `default_value_for_new_params` otherwise.
+
+        Notes
+        -----
+        This method provides a dictionary view of the current parameter state
+        projected onto the active ansatz only. Stored entries in `parameter_memory`
+        for parameters that are no longer present in the current ansatz are ignored.
+
+        It is mainly useful for debugging, inspection, serialization, or for
+        understanding how the current ansatz would be initialized by
+        `build_warm_start_initial_point`.
+
+        Examples
+        --------
+        Inspect the currently active parameter values:
+
+        >>> experiment.get_current_parameter_dict()
+
+        After inserting a new block, newly introduced parameters appear with the
+        specified default value unless they have already been assigned a stored
+        value:
+
+        >>> experiment.get_current_parameter_dict(default_value_for_new_params=0.0)
+        """
+
+        return {
+            p.name: self.parameter_memory.get(p.name, default_value_for_new_params)
+            for p in self._ordered_current_parameters()
+        }
+        
+    def prune_parameter_memory_to_current_ansatz(self) -> None:
+        """
+        Remove stored parameter values that no longer belong to the current ansatz.
+
+        This helper prunes `parameter_memory` so that it only contains entries for
+        parameters that are still present in the current adaptive ansatz. Any stored
+        values associated with parameters that were removed by gate deletion,
+        pruning, rollback to an earlier structure, or transpiler-based
+        simplification are discarded.
+
+        Notes
+        -----
+        This method is mainly a housekeeping utility. It is not required for the
+        warm-start mechanism to function correctly, because
+        `build_warm_start_initial_point` already ignores parameter names that are
+        not present in the current ansatz.
+        """
+        current_names = {p.name for p in self._ordered_current_parameters()}
+        self.parameter_memory = {
+            name: value
+            for name, value in self.parameter_memory.items()
+            if name in current_names
+        }
+    
     def _update_locked_gates_on_insert(self, circ_ind: int) -> None:
         """
         Update `locked_gates` after inserting a new two-qubit gate.
@@ -553,6 +734,9 @@ class MutableAnsatzExperiment:
         initial_point: list | np.ndarray | None = None,
         loss_next: Callable[[np.ndarray], float] | None = None,
         iterations: int = 100,
+        update_parameter_memory: bool = True,
+        reuse_parameter_memory: bool = True,
+        default_value_for_new_params: float = 0.0,
         **kwargs
         ) -> OptimizerResult:
         """
@@ -568,6 +752,15 @@ class MutableAnsatzExperiment:
             An optional function to evaluate the objective at the next step.
         iterations : int
             The number of optimization steps.
+        update_parameter_memory : bool, optional
+            If `True`, the parameter values at the end of this training run are stored
+            in `parameter_memory` for potential reuse in future runs. Defaults to `True`.
+        reuse_parameter_memory : bool, optional
+            If `True` and `initial_point` is `None`, construct the starting vector
+            from `parameter_memory` using the current ansatz parameter names.
+        default_value_for_new_params : float, optional
+            Default value assigned to current parameters that are not yet present in
+            `parameter_memory` when warm-starting a run.
         **kwargs
             Additional configuration. Currently supports:
             - `use_epochs`
@@ -579,6 +772,11 @@ class MutableAnsatzExperiment:
         OptimizerResult
             The result of the optimization.
         """
+        
+        if initial_point is None and reuse_parameter_memory and self.parameter_memory:
+            initial_point = self.build_warm_start_initial_point(
+                default_value_for_new_params=default_value_for_new_params
+            )
         
         current_ansatz = self.adaptive_ansatz.get_current_ansatz()
         result = self.trainer.train_one_time(
@@ -593,7 +791,101 @@ class MutableAnsatzExperiment:
         if self.cost_history is not None:
             self.cost_history.append(result)
             
+        if update_parameter_memory:
+            self._store_parameter_values(result.x)
+            
         return result
+    
+    def _snapshot_state(self) -> ExperimentSnapshot:
+        """
+        Return a snapshot of the current mutable-experiment state.
+
+        The snapshot is intended for outer-loop updates. Before
+        attempting a structural ansatz modification, the experiment can store a
+        snapshot and later restore it if the proposed modification is rejected.
+
+        Returns
+        -------
+        ExperimentSnapshot
+            Independent snapshot of the current experiment state.
+
+        Notes
+        -----
+        Mutable fields are copied explicitly so that later changes to the live
+        experiment do not affect the stored snapshot.
+
+        The snapshot currently includes:
+        - the current ansatz,
+        - locked-gate bookkeeping,
+        - two-qubit gate bookkeeping,
+        - live parameter memory,
+        - parameter-memory history,
+        - the trainer's last accepted cost and parameter vector,
+        - the outer-loop iteration counter.
+        """
+        return ExperimentSnapshot(
+            ansatz=self.adaptive_ansatz.get_current_ansatz().copy(),
+            locked_gates=set(self.locked_gates),
+            two_q_map=dict(self._2qbg_positions),
+            parameter_memory=dict(self.parameter_memory),
+            parameter_memory_history=[
+                ParameterMemoryRecord(
+                    outer_iteration=record.outer_iteration,
+                    action=record.action,
+                    accepted=record.accepted,
+                    values=dict(record.values),
+                    cost=record.cost,
+                )
+                for record in self.parameter_memory_history
+            ],
+            last_cost=float(self.last_cost),
+            last_params=np.asarray(self.last_params, dtype=float).copy(),
+            outer_iteration=self._outer_iteration,
+        )
+
+
+    def _restore_state(self, snapshot: ExperimentSnapshot) -> None:
+        """
+        Restore the mutable-experiment state from a previously stored snapshot.
+
+        Parameters
+        ----------
+        snapshot : ExperimentSnapshot
+            Snapshot to restore.
+
+        Notes
+        -----
+        This method is intended to roll back a rejected outer-loop proposal. It
+        restores the ansatz, bookkeeping structures, parameter-memory state, and
+        the trainer's cached last accepted evaluation.
+
+        Mutable fields are copied again on restore so that the restored live state
+        remains independent of the snapshot object.
+        """
+        self.adaptive_ansatz.update_ansatz(snapshot.ansatz.copy())
+        self._sync_after_ansatz_change()
+
+        self.locked_gates = set(snapshot.locked_gates)
+        self._2qbg_positions = dict(snapshot.two_q_map)
+
+        self.parameter_memory = dict(snapshot.parameter_memory)
+        self.parameter_memory_history = [
+            ParameterMemoryRecord(
+                outer_iteration=record.outer_iteration,
+                action=record.action,
+                accepted=record.accepted,
+                values=dict(record.values),
+                cost=record.cost,
+            )
+            for record in snapshot.parameter_memory_history
+        ]
+
+        self._outer_iteration = snapshot.outer_iteration
+
+        self.trainer.update_last_evaluation(
+            cost=snapshot.last_cost,
+            params=np.asarray(snapshot.last_params, dtype=float).copy(),
+        )
 
     def insert_random(self) -> None:
         """
