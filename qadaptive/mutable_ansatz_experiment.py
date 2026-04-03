@@ -389,6 +389,49 @@ class MutableAnsatzExperiment:
 
         for param, value in zip(params, values):
             self.parameter_memory[param.name] = float(value)
+            
+    def _record_parameter_memory(
+        self,
+        action: str,
+        accepted: bool,
+        cost: float | None = None,
+    ) -> None:
+        """
+        Append the current live parameter memory to `parameter_memory_history`.
+
+        Parameters
+        ----------
+        action : str
+            Label describing the training context associated with the current
+            parameter-memory state, for example ``"initial_train"``,
+            ``"insert_block"``, or ``"prune_two_qubit"``.
+        accepted : bool
+            Whether the outer-loop proposal associated with this parameter state was
+            ultimately accepted.
+        cost : float | None, optional
+            Objective value associated with the current parameter state. If None,
+            the value is left unspecified in the stored record.
+
+        Notes
+        -----
+        This method records a snapshot of the current live `parameter_memory` for
+        later analysis. The stored dictionary is copied so that subsequent updates
+        to the live cache do not modify the historical record.
+
+        This history is intended for diagnostic and analysis purposes. Unlike
+        `parameter_memory`, which stores only the current reusable parameter cache,
+        `parameter_memory_history` preserves the sequence of parameter states
+        encountered during the outer-loop workflow.
+        """
+        self.parameter_memory_history.append(
+            ParameterMemoryRecord(
+                outer_iteration=self._outer_iteration,
+                action=action,
+                accepted=accepted,
+                values=dict(self.parameter_memory),
+                cost=cost,
+            )
+        )
 
     def build_warm_start_initial_point(
         self,
@@ -796,6 +839,59 @@ class MutableAnsatzExperiment:
             
         return result
     
+    def evaluate_current_objective(
+        self,
+        cost: Callable[[np.ndarray, QuantumCircuit], float],
+        params: list[float] | np.ndarray | None = None,
+    ) -> float:
+        """
+        Evaluate the objective for the current ansatz.
+
+        Parameters
+        ----------
+        cost : Callable[[np.ndarray, QuantumCircuit], float]
+            Objective function used to score the current ansatz. The function is
+            expected to accept the parameter vector together with the ansatz either
+            as ``cost(params, ansatz)`` or as ``cost(params, ansatz=ansatz)``.
+        params : list[float] | np.ndarray | None, optional
+            Parameter vector at which to evaluate the current ansatz. If None, the
+            method uses `self.last_params` when it matches the current ansatz size.
+            For a parameter-free ansatz, an empty vector is used automatically.
+
+        Returns
+        -------
+        float
+            Objective value of the current ansatz at the chosen parameter vector.
+
+        Raises
+        ------
+        ValueError
+            If no compatible parameter vector is available for the current ansatz.
+        """
+        current_ansatz = self.ansatz
+        num_params = current_ansatz.num_parameters
+
+        if params is None:
+            if num_params == 0:
+                params_array = np.array([], dtype=float)
+            elif len(self.last_params) == num_params:
+                params_array = np.asarray(self.last_params, dtype=float)
+            else:
+                raise ValueError(
+                    "No compatible parameter vector is available for the current ansatz. "
+                    "Provide `params` explicitly or train the ansatz first."
+                )
+        else:
+            params_array = np.asarray(params, dtype=float)
+            if len(params_array) != num_params:
+                raise ValueError(
+                    f"Got {len(params_array)} parameters for an ansatz with {num_params} parameters."
+                )
+
+        try:
+            return float(cost(params_array, ansatz=current_ansatz))
+        except TypeError:
+            return float(cost(params_array, current_ansatz))
     def _snapshot_state(self) -> ExperimentSnapshot:
         """
         Return a snapshot of the current mutable-experiment state.
