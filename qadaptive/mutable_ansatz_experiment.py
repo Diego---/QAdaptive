@@ -2,7 +2,6 @@ import logging
 import numpy as np
 
 from typing import Callable, SupportsFloat
-from dataclasses import dataclass
 
 from qiskit.circuit import QuantumCircuit, Parameter
 from qiskit.transpiler import PassManager
@@ -26,139 +25,25 @@ from qadaptive.mutation import (
 from qadaptive.simplification import simplify_ansatz
 from qadaptive.pruning import evaluate_two_qubit_gate_pruning
 from qadaptive.action_definitions import (
-    ACTION_DEFINITIONS,
     INSERT_RANDOM_GATE,
     INSERT_GATE,
     INSERT_BLOCK,
     REMOVE_GATE,
     SIMPLIFY,
     PRUNE_TWO_QUBIT,
-    ActionDefinition
+)
+from qadaptive.outer_loop import (
+    OuterStepResult,
+    ParameterMemoryRecord,
+    ExperimentSnapshot,
+    ActionSpec,
+    OuterStepPlan
 )
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
 
 logger = logging.getLogger(__name__)
-
-@dataclass
-class OuterStepResult:
-    """
-    Result of one outer-loop step.
-
-    This record summarizes what structural action was attempted, whether it was
-    accepted, and how the objective and ansatz complexity changed.
-
-    Attributes
-    ----------
-    iteration : int
-        Outer-loop iteration index of the attempted step.
-    action : str
-        Name of the action that was attempted, for example ``"insert_block"``
-        or ``"prune_two_qubit"``.
-    accepted : bool
-        Whether the proposed structural update was accepted.
-    cost_before : float | None
-        Objective value before the action and retraining.
-    cost_after : float | None
-        Objective value after the action and retraining.
-    delta_cost : float | None
-        Difference ``cost_after - cost_before``.
-    num_parameters_before : int
-        Number of ansatz parameters before the attempted step.
-    num_parameters_after : int
-        Number of ansatz parameters after the attempted step.
-    num_two_qubit_before : int
-        Number of tracked two-qubit gates before the attempted step.
-    num_two_qubit_after : int
-        Number of tracked two-qubit gates after the attempted step.
-    note : str | None
-        Optional comment describing special circumstances, for example
-        ``"rejected and rolled back"``.
-    """
-
-    iteration: int
-    action: str
-    accepted: bool
-    cost_before: float | None
-    cost_after: float | None
-    delta_cost: float | None
-    num_parameters_before: int
-    num_parameters_after: int
-    num_two_qubit_before: int
-    num_two_qubit_after: int
-    note: str | None = None
-
-@dataclass
-class ParameterMemoryRecord:
-    """
-    Record of the parameter-memory state after one inner-loop training run.
-
-    This is a history object for later analysis. Unlike `parameter_memory`,
-    which stores only the current reusable parameter cache, this record stores a
-    snapshot of that cache together with metadata describing when and under what
-    action it was produced.
-
-    Attributes
-    ----------
-    outer_iteration : int
-        Outer-loop iteration associated with this record.
-    action : str
-        Action associated with the training run that produced this parameter
-        state, for example ``"initial_train"``, ``"insert_gate"``, or
-        ``"prune_two_qubit"``.
-    accepted : bool
-        Whether the corresponding outer-loop proposal was ultimately accepted.
-    values : dict[str, float]
-        Snapshot of the parameter memory at that point in the run.
-    cost : float | None
-        Objective value associated with this parameter state, if available.
-    """
-
-    outer_iteration: int
-    action: str
-    accepted: bool
-    values: dict[str, float]
-    cost: float | None = None
-
-@dataclass
-class ExperimentSnapshot:
-    """
-    Snapshot of the mutable experiment state.
-
-    This record is intended for outer-loop steps: before applying
-    a structural modification, the experiment can store a snapshot and later
-    restore it if the proposed step is rejected.
-
-    Attributes
-    ----------
-    ansatz : QuantumCircuit
-        Copy of the current ansatz circuit.
-    locked_gates : set[LockId]
-        Set of currently locked two-qubit gates.
-    two_q_map : TwoQMap
-        Mapping from circuit-data indices to ordered qubit pairs for the current
-        two-qubit gates.
-    parameter_memory : dict[str, float]
-        Current live parameter-value cache.
-    parameter_memory_history : list[dict[str, float]]
-        History of stored parameter-memory states accumulated so far.
-    last_cost : float
-        Most recent accepted cost value recorded by the trainer.
-    last_params : np.ndarray
-        Most recent accepted parameter vector recorded by the trainer.
-    outer_iteration : int
-        Outer-loop iteration counter at the time of the snapshot.
-    """
-
-    ansatz: QuantumCircuit
-    locked_gates: set[LockId]
-    two_q_map: TwoQMap
-    parameter_memory: dict[str, float]
-    parameter_memory_history: list[ParameterMemoryRecord]
-    last_cost: float
-    last_params: np.ndarray
-    outer_iteration: int
 
 class MutableAnsatzExperiment:
     """
@@ -957,17 +842,16 @@ class MutableAnsatzExperiment:
         
     def _apply_action(
         self,
-        action: str,
+        spec: ActionSpec,
         cost: Callable[[np.ndarray, QuantumCircuit], float] | None = None,
-        **action_kwargs,
     ) -> None:
         """
-        Apply one structural outer-loop action to the current ansatz.
+        Apply one validated atomic action.
 
         Parameters
         ----------
-        action : str
-            Name of the action to apply. Supported actions are:
+        spec : ActionSpec
+            ActionSpec to apply. Supported actions are:
             - ``"insert_random_gate"``
             - ``"insert_gate"``
             - ``"insert_block"``
@@ -977,8 +861,6 @@ class MutableAnsatzExperiment:
         cost : Callable[[np.ndarray, QuantumCircuit], float] | None, optional
             Objective function required by actions that internally evaluate the
             ansatz, currently ``"prune_two_qubit"``.
-        **action_kwargs
-            Additional keyword arguments forwarded to the selected action.
 
         Raises
         ------
@@ -991,23 +873,41 @@ class MutableAnsatzExperiment:
         small action vocabulary into calls to the corresponding structural-update
         methods of the experiment.
         """
-        definition = ACTION_DEFINITIONS.get(action)
-        if definition is None:
-            raise ValueError(f"Unknown outer-loop action '{action}'.")
-
-        missing = [key for key in definition.required_kwargs if key not in action_kwargs]
-        if missing:
-            raise ValueError(
-                f"Action '{action}' is missing required kwargs: {missing}."
-            )
-
-        if definition.requires_cost:
-            if cost is None:
-                raise ValueError(f"Action '{action}' requires a `cost` callable.")
-            action_kwargs["cost"] = cost
-
         registry = self._action_registry()
-        registry[action](**action_kwargs)
+        
+        if spec.requires_cost:
+            if cost is None:
+                raise ValueError(
+                    f"Action '{spec.action}' requires a cost callable."
+                )
+            registry[spec.action](cost=cost, **spec.kwargs)
+        else:
+            registry[spec.action](**spec.kwargs)
+        
+    def execute_action_plan(
+        self,
+        plan: OuterStepPlan,
+        cost: Callable[[np.ndarray, QuantumCircuit], float] | None = None,
+    ) -> None:
+        """
+        Execute all atomic actions contained in an outer-step plan.
+        
+        Parameters
+        ----------
+        plan : OuterStepPlan
+            Structured plan containing a sequence of atomic actions to apply to the
+            current ansatz.
+        cost : Callable[[np.ndarray, QuantumCircuit], float] | None, optional
+            Objective function required by actions that internally evaluate the
+            ansatz, currently ``"prune_two_qubit"``.
+        
+        Raises
+        ------
+        ValueError
+            If any action in the plan is unknown or if a required argument is missing.
+        """
+        for spec in plan.actions:
+            self._apply_action(spec, cost=cost)
     
     def _snapshot_state(self) -> ExperimentSnapshot:
         """
@@ -1099,6 +999,54 @@ class MutableAnsatzExperiment:
             cost=snapshot.last_cost,
             params=np.asarray(snapshot.last_params, dtype=float).copy(),
         )
+
+    def _accept_outer_step(
+        self,
+        cost_before: float,
+        cost_after: float,
+        accept_tol: float = 0.0,
+        complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
+        ansatz_before: QuantumCircuit | None = None,
+        ansatz_after: QuantumCircuit | None = None,
+    ) -> bool:
+        """
+        Return whether a proposed outer-loop update should be accepted.
+
+        Parameters
+        ----------
+        cost_before : float
+            Objective value before the structural proposal.
+        cost_after : float
+            Objective value after the structural proposal and retraining.
+        accept_tol : float, optional
+            Required improvement threshold. The proposal is accepted if the final
+            score is at least `accept_tol` lower than the initial score.
+        complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
+            Optional penalty function added to the objective in order to discourage
+            overly complex ansaetze.
+        ansatz_before : QuantumCircuit | None, optional
+            Ansatz before the proposal. Required if `complexity_penalty` is used.
+        ansatz_after : QuantumCircuit | None, optional
+            Ansatz after the proposal. Required if `complexity_penalty` is used.
+
+        Returns
+        -------
+        bool
+            True if the proposal is accepted, False otherwise.
+        """
+        score_before = float(cost_before)
+        score_after = float(cost_after)
+
+        if complexity_penalty is not None:
+            if ansatz_before is None or ansatz_after is None:
+                raise ValueError(
+                    "`ansatz_before` and `ansatz_after` must be provided when "
+                    "`complexity_penalty` is used."
+                )
+            score_before += float(complexity_penalty(ansatz_before))
+            score_after += float(complexity_penalty(ansatz_after))
+
+        return score_after <= score_before - accept_tol
 
     def insert_random(self) -> None:
         """
