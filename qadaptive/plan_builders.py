@@ -1,6 +1,9 @@
+import random
+
 from collections import Counter
 from typing import Any, Callable
 
+from qadaptive import MutableAnsatzExperiment
 from qadaptive.action_definitions import INSERT_BLOCK, SIMPLIFY
 from qadaptive.outer_loop import OuterStepPlan, ActionSpec
 from qadaptive.mutation import TwoQMap
@@ -12,8 +15,8 @@ def default_append_index_policy(experiment, target, insertion_number: int) -> in
 
 def random_insert_index_policy(experiment, target, insertion_number: int) -> int:
     """Insert at a random circuit-data index."""
-    num_indices = len(experiment.ansatz.data) + 1
-    return experiment.rng.integers(0, num_indices)
+    num_indices = len(experiment.ansatz.data)
+    return random.randint(0, num_indices)
 
 def pair_counts(two_q_map: TwoQMap) -> dict[tuple[int, int], int]:
     """
@@ -97,7 +100,7 @@ def select_star_targets(
     return ordered
 
 def build_star_growth_plan(
-    experiment,
+    experiment: MutableAnsatzExperiment,
     center_qubit: int = 0,
     block_name: str = "cx_identity",
     max_insertions: int = 2,
@@ -211,7 +214,7 @@ def build_star_growth_plan(
     )
     
 def build_uniform_growth_plan(
-    experiment,
+    experiment: MutableAnsatzExperiment,
     block_name: str = "cx_identity",
     insert_index_policy: Callable | None = None,
     add_simplify: bool = True,
@@ -296,7 +299,7 @@ def build_uniform_growth_plan(
     )
 
 def build_single_qubit_block_plan(
-    experiment,
+    experiment: MutableAnsatzExperiment,
     block_name: str = "rz_rx_rz",
     qubits: list[int] | None = None,
     insert_index_policy: Callable | None = None,
