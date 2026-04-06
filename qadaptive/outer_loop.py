@@ -9,7 +9,7 @@ from qiskit.circuit import QuantumCircuit
 from qadaptive.mutation import TwoQMap, LockId
 from qadaptive.action_definitions import ACTION_DEFINITIONS, ActionDefinition
 
-AcceptanceMode = Literal["outer", "internal"]
+AcceptanceMode = Literal["outer", "internal", "force"]
 
 @dataclass
 class OuterStepResult:

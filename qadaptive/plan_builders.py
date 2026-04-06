@@ -105,6 +105,7 @@ def build_star_growth_plan(
     block_name: str = "cx_identity",
     max_insertions: int = 2,
     insert_index_policy: Callable | None = None,
+    force_accept: bool = False,
     allowed_targets: list[int] | None = None,
     forbidden_targets: list[int] | None = None,
     add_simplify: bool = True,
@@ -135,6 +136,9 @@ def build_star_growth_plan(
         Function that determines the circuit-data index for each insertion.
         It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
         If None, a default policy that appends at the end of the circuit is used.
+    force_accept : bool, optional
+        Whether to set the acceptance mode to "force", which accepts all changes
+        made by the plan without evaluating the cost.
     allowed_targets : list[int] | None, optional
         Explicit whitelist of allowed target qubits.
     forbidden_targets : list[int] | None, optional
@@ -209,7 +213,7 @@ def build_star_growth_plan(
     return OuterStepPlan(
         name=f"star_growth_q{center_qubit}",
         actions=actions,
-        acceptance_mode="outer",
+        acceptance_mode="force" if force_accept else "outer",
         label=label,
     )
     
@@ -217,6 +221,7 @@ def build_uniform_growth_plan(
     experiment: MutableAnsatzExperiment,
     block_name: str = "cx_identity",
     insert_index_policy: Callable | None = None,
+    force_accept: bool = False,
     add_simplify: bool = True,
     simplify_kwargs: dict[str, Any] | None = None,
     label: str | None = None,
@@ -237,6 +242,9 @@ def build_uniform_growth_plan(
         Function that determines the circuit-data index for each insertion.
         It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
         If None, a default policy that appends at the end of the circuit is used.
+    force_accept : bool, optional
+        Whether to set the acceptance mode to "force", which accepts all changes
+        made by the plan without evaluating the cost.
     add_simplify : bool, optional
         Whether to append a simplification action after the insertion burst.
     simplify_kwargs : dict[str, Any] | None, optional
@@ -294,7 +302,7 @@ def build_uniform_growth_plan(
     return OuterStepPlan(
         name="uniform_growth",
         actions=actions,
-        acceptance_mode="outer",
+        acceptance_mode="force" if force_accept else "outer",
         label=label,
     )
 
@@ -303,6 +311,7 @@ def build_single_qubit_block_plan(
     block_name: str = "rz_rx_rz",
     qubits: list[int] | None = None,
     insert_index_policy: Callable | None = None,
+    force_accept: bool = False,
     add_simplify: bool = True,
     simplify_kwargs: dict[str, Any] | None = None,
     label: str | None = None,
@@ -325,6 +334,9 @@ def build_single_qubit_block_plan(
         Function that determines the circuit-data index for each insertion.
         It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
         If None, a default policy that appends at the end of the circuit is used.
+    force_accept : bool, optional
+        Whether to set the acceptance mode to "force", which accepts all changes
+        made by the plan without evaluating the cost.
     add_simplify : bool, optional
         Whether to append a simplification action after the insertion burst.
     simplify_kwargs : dict[str, Any] | None, optional
@@ -384,7 +396,7 @@ def build_single_qubit_block_plan(
     return OuterStepPlan(
         name="single_qubit_block_growth",
         actions=actions,
-        acceptance_mode="outer",
+        acceptance_mode="force" if force_accept else "outer",
         label=label,
     )
 

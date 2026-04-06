@@ -999,6 +999,23 @@ class MutableAnsatzExperiment:
                     cost=cost_after,
                     note=note
                 )
+        
+        elif plan.acceptance_mode == "force":
+            accepted = True
+            note = "Force-accepted by plan configuration."
+
+            logger.info(
+                "Plan '%s' used force acceptance; generic outer acceptance was skipped.",
+                plan.display_name,
+            )
+
+            if record_parameter_memory:
+                self._record_parameter_memory(
+                    action=plan.display_name,
+                    accepted=True,
+                    cost=cost_after,
+                )
+            
         else:
             raise ValueError(
                 f"Unknown acceptance mode '{plan.acceptance_mode}'."
