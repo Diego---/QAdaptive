@@ -63,7 +63,7 @@ class MutableAnsatzExperiment:
     trainer : InnerLoopTrainer
         Inner-loop trainer responsible for parameter optimization and tracking
         optimizer-side state.
-    cost_history : list[OptimizerResult] | None
+    result_history : list[OptimizerResult] | None
         History of optimization results returned by the trainer after each
         `train_one_time` call, if tracking is enabled; otherwise None.
         _outer_iteration : int
@@ -97,7 +97,7 @@ class MutableAnsatzExperiment:
         self, 
         adaptive_ansatz: AdaptiveAnsatz,
         trainer: InnerLoopTrainer,
-        track_costs: bool = True,
+        track_results: bool = True,
         ) -> None:
         """
         Initialize the MutableAnsatzExperiment.
@@ -108,8 +108,8 @@ class MutableAnsatzExperiment:
             The adaptive ansatz to be optimized.
         trainer : InnerLoopTrainer
             An inner loop trainer object that handles the inner optimization.
-        track_costs : bool, optional
-            Indicates whether inner-loop cost history is being tracked. Defaults to True.
+        track_results : bool, optional
+            Indicates whether inner-loop results history is being tracked. Defaults to True.
         """
         self.adaptive_ansatz = adaptive_ansatz.copy()
         self.ansatz: QuantumCircuit = self.adaptive_ansatz.get_current_ansatz()
@@ -117,7 +117,7 @@ class MutableAnsatzExperiment:
             raise ValueError("A trainer instance must be provided.")
         self.trainer = trainer
         self._outer_iteration = 0
-        self.cost_history = [] if track_costs else None
+        self.result_history = [] if track_results else None
         # Two qubit gate positions
         self._2qbg_positions = self._get_two_qubit_gate_indices()
         # Some 2 qubit gates will be important and thus get locked
@@ -726,14 +726,251 @@ class MutableAnsatzExperiment:
             **kwargs,
         )
         
-        if self.cost_history is not None:
-            self.cost_history.append(result)
+        if self.result_history is not None:
+            self.result_history.append(result)
             
         if update_parameter_memory:
             self._store_parameter_values(result.x)
             
         return result
     
+    def run_outer_step(
+        self,
+        loss_function: Callable[[np.ndarray], float],
+        plan: OuterStepPlan,
+        train_iterations: int = 100,
+        initial_point: list | np.ndarray | None = None,
+        loss_next: Callable[[np.ndarray], float] | None = None,
+        train_after_plan: bool = True,
+        update_parameter_memory: bool = True,
+        reuse_parameter_memory: bool = False,
+        default_value_for_new_params: float = 0.0,
+        record_parameter_memory: bool = True,
+        accept_tol: float = 0.0,
+        complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
+        **train_kwargs,
+    ) -> OuterStepResult:
+        """
+        Execute one outer-loop proposal, optionally retrain, and record the result.
+
+        Parameters
+        ----------
+        loss_function : Callable[[np.ndarray], float]
+            Objective function used for training and, when needed, for evaluating
+            the current ansatz.
+        plan : OuterStepPlan
+            Concrete structural proposal to execute.
+        train_iterations : int, optional
+            Number of inner-loop optimization steps after executing the plan.
+        initial_point : list | np.ndarray | None, optional
+            Explicit starting point for retraining. If None, the method follows the
+            warm-start settings.
+        loss_next : Callable[[np.ndarray], float] | None, optional
+            Optional objective for next-step evaluation during training.
+        train_after_plan : bool, optional
+            Whether to retrain after executing the plan.
+        update_parameter_memory : bool, optional
+            Whether to update the live parameter cache after retraining.
+        reuse_parameter_memory : bool, optional
+            Whether to build the retraining initial point from `parameter_memory`
+            when `initial_point` is not provided.
+        default_value_for_new_params : float, optional
+            Default value for parameters not yet present in `parameter_memory`.
+        record_parameter_memory : bool, optional
+            Whether to append a parameter-memory record for this attempted step.
+        accept_tol : float, optional
+            Required score improvement threshold for generic outer acceptance.
+        complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
+            Optional penalty added to the objective when deciding acceptance in
+            `acceptance_mode="outer"`.
+        **train_kwargs
+            Additional keyword arguments forwarded to `train_one_time`.
+
+        Returns
+        -------
+        OuterStepResult
+            Summary of the attempted outer-loop step.
+
+        Raises
+        ------
+        ValueError
+            If the current ansatz has not been trained yet and the selected
+            acceptance mode requires a valid baseline.
+        """
+        snapshot = self._snapshot_state()
+
+        ansatz_before = snapshot.ansatz.copy()
+        num_parameters_before = ansatz_before.num_parameters
+        num_two_qubit_before = len(snapshot.two_q_map)
+
+        if self.outer_step_history:
+            cost_before = float(snapshot.last_cost)
+        else:
+            logger.info("No previous training history; first outer step always gets accepted if acceptance_mode='outer'.")
+            cost_before = None
+        
+        logger.info(
+            "Starting outer step %d with plan '%s' (%d actions, acceptance_mode=%s).",
+            self._outer_iteration,
+            plan.display_name,
+            len(plan.actions),
+            plan.acceptance_mode,
+        )
+        logger.info(
+            "Baseline before outer step %d: cost=%.10f, params=%d, two_qubit_gates=%d.",
+            self._outer_iteration,
+            cost_before,
+            num_parameters_before,
+            num_two_qubit_before,
+        )
+
+        # Execute the structural proposal.
+        self.execute_action_plan(plan, cost=loss_function)
+
+        train_result: OptimizerResult | None = None
+        if train_after_plan:     
+            logger.info(
+                "Retraining after plan '%s' for %d inner-loop iterations.",
+                plan.display_name,
+                train_iterations,
+            )
+            
+            train_result = self.train_one_time(
+                loss_function=loss_function,
+                initial_point=initial_point,
+                loss_next=loss_next,
+                iterations=train_iterations,
+                update_parameter_memory=update_parameter_memory,
+                reuse_parameter_memory=reuse_parameter_memory,
+                default_value_for_new_params=default_value_for_new_params,
+                **train_kwargs,
+            )
+            cost_after = float(train_result.fun)
+        else:
+            if plan.acceptance_mode == "outer":
+                raise ValueError(
+                    "`train_after_plan` must be True when `plan.acceptance_mode == 'outer'`."
+                )
+            cost_after = float(self.last_cost)
+
+        ansatz_after = self.ansatz.copy()
+        num_parameters_after = ansatz_after.num_parameters
+        num_two_qubit_after = len(self._2qbg_positions)
+
+        # Keep a copy of the trial parameter memory before a possible rollback.
+        trial_parameter_memory = dict(self.parameter_memory)
+
+        if plan.acceptance_mode == "outer":
+            if self.outer_step_history:
+                accepted = self._accept_outer_step(
+                    cost_before=cost_before,
+                    cost_after=cost_after,
+                    accept_tol=accept_tol,
+                    complexity_penalty=complexity_penalty,
+                    ansatz_before=ansatz_before,
+                    ansatz_after=ansatz_after,
+                )
+                note = None
+            else:
+                accepted = True  # Always accept the first step if no baseline is available.
+                note = "First step with no baseline; automatically accepted."
+
+            if accepted:
+                logger.info(
+                    "Accepted outer step %d for plan '%s'.",
+                    self._outer_iteration,
+                    plan.display_name,
+                )
+                
+                if record_parameter_memory:
+                    self._record_parameter_memory(
+                        action=plan.display_name,
+                        accepted=True,
+                        cost=cost_after,
+                    )
+            else:
+                
+                logger.info(
+                    "Rejected outer step %d for plan '%s'. Restoring previous snapshot.",
+                    self._outer_iteration,
+                    plan.display_name,
+                )
+                
+                self._restore_state(snapshot)
+                note = "Rejected and rolled back."
+                if record_parameter_memory:
+                    self.parameter_memory_history.append(
+                        ParameterMemoryRecord(
+                            outer_iteration=self._outer_iteration,
+                            action=plan.display_name,
+                            accepted=False,
+                            values=trial_parameter_memory,
+                            cost=cost_after,
+                        )
+                    )
+
+        elif plan.acceptance_mode == "internal":
+            
+            logger.info(
+                "Plan '%s' used internal acceptance mode; generic outer acceptance was skipped.",
+                plan.display_name,
+            )
+            
+            # Best-effort guess for internally accepted plans such as pruning:
+            # if the circuit structure changed, we treat the proposal as accepted.
+            accepted = (
+                len(ansatz_after.data) != len(ansatz_before.data)
+                or self._2qbg_positions != snapshot.two_q_map
+            )
+            note = "Internal acceptance mode; generic outer acceptance was skipped."
+
+            if record_parameter_memory:
+                self.parameter_memory_history.append(
+                    ParameterMemoryRecord(
+                        outer_iteration=self._outer_iteration,
+                        action=plan.display_name,
+                        accepted=accepted,
+                        values=trial_parameter_memory,
+                        cost=cost_after,
+                    )
+                )
+        else:
+            raise ValueError(
+                f"Unknown acceptance mode '{plan.acceptance_mode}'."
+            )
+            
+        delta_cost = None if cost_before is None else cost_after - cost_before
+            
+        logger.info(
+            "Completed outer step %d: accepted=%s, delta_cost=%.10f, params %d->%d, two_qubit_gates %d->%d.",
+            self._outer_iteration,
+            accepted,
+            delta_cost,
+            num_parameters_before,
+            num_parameters_after,
+            num_two_qubit_before,
+            num_two_qubit_after,
+        )
+
+        result = OuterStepResult(
+            iteration=self._outer_iteration,
+            action=plan.display_name,
+            accepted=accepted,
+            cost_before=cost_before,
+            cost_after=cost_after,
+            delta_cost=delta_cost,
+            num_parameters_before=num_parameters_before,
+            num_parameters_after=num_parameters_after,
+            num_two_qubit_before=num_two_qubit_before,
+            num_two_qubit_after=num_two_qubit_after,
+            note=note,
+        )
+
+        self.outer_step_history.append(result)
+        self._outer_iteration += 1
+
+        return result
+
     def evaluate_current_objective(
         self,
         cost: Callable[[np.ndarray, QuantumCircuit], float],
