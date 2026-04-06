@@ -90,6 +90,21 @@ class ParameterMemoryRecord:
     accepted: bool
     values: dict[str, float]
     cost: float | None = None
+    
+@dataclass
+class AcceptedAnsatzRecord:
+    """
+    Snapshot of one accepted trained ansatz state.
+    """
+
+    outer_iteration: int
+    action: str
+    cost: float | None
+    num_parameters: int
+    num_two_qubit_gates: int
+    ansatz: QuantumCircuit
+    parameter_values: dict[str, float]
+    note: str | None = None
 
 @dataclass
 class ExperimentSnapshot:
