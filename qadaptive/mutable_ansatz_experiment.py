@@ -819,7 +819,7 @@ class MutableAnsatzExperiment:
         logger.info(
             "Baseline before outer step %d: cost=%s, params=%d, two_qubit_gates=%d.",
             self._outer_iteration,
-            cost_before,
+            "None" if cost_before is None else f"{cost_before:.10f}",
             num_parameters_before,
             num_two_qubit_before,
         )
@@ -945,7 +945,7 @@ class MutableAnsatzExperiment:
             "Completed outer step %d: accepted=%s, delta_cost=%s, params %d->%d, two_qubit_gates %d->%d.",
             self._outer_iteration,
             accepted,
-            delta_cost,
+            "None" if delta_cost is None else f"{delta_cost:.10f}",
             num_parameters_before,
             num_parameters_after,
             num_two_qubit_before,
