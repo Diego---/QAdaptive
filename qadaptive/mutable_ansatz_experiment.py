@@ -1015,6 +1015,12 @@ class MutableAnsatzExperiment:
                     accepted=True,
                     cost=cost_after,
                 )
+                
+            self._record_accepted_ansatz(
+                    action=plan.display_name,
+                    cost=None,
+                    note=note
+                )
             
         else:
             raise ValueError(
