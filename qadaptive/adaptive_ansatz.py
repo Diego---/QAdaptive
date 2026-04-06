@@ -7,7 +7,7 @@ from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 
 from qadaptive.operator_pool import DEFAULT_BLOCK_POOL, PoolBlock
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qadaptive.core.adaptive_ansatz")
 
 INSTRUCTION_MAP = get_standard_gate_name_mapping()
 

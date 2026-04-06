@@ -45,7 +45,7 @@ from qadaptive.utils import create_callback_args
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qadaptive.outer.mutable_ansatz_experiment")
 
 class MutableAnsatzExperiment:
     """

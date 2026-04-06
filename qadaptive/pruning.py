@@ -7,7 +7,7 @@ from qiskit import QuantumCircuit
 
 from qadaptive.mutation import TwoQMap, LockId
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qadaptive.core.pruning")
 
 
 @dataclass(frozen=True)
