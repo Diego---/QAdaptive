@@ -217,7 +217,7 @@ class OuterStepPlan:
         ``"star_growth_q0"`` or ``"prune_then_simplify"``.
     actions : list[ActionSpec]
         Ordered sequence of atomic actions to execute as part of the proposal.
-    acceptance_mode : {"outer", "internal"}
+    acceptance_mode : {"outer", "internal", "force}
         How acceptance should be handled for the plan.
 
         - ``"outer"`` means the plan is treated as a standard proposal:
@@ -241,7 +241,7 @@ class OuterStepPlan:
         if not self.name:
             raise ValueError("`name` must be a non-empty string.")
 
-        if self.acceptance_mode not in ("outer", "internal"):
+        if self.acceptance_mode not in ("outer", "internal", "force"):
             raise ValueError(
                 "`acceptance_mode` must be either 'outer' or 'internal'."
             )
