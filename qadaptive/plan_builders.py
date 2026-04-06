@@ -4,7 +4,7 @@ from collections import Counter
 from typing import Any, Callable
 
 from qadaptive import MutableAnsatzExperiment
-from qadaptive.action_definitions import INSERT_BLOCK, SIMPLIFY
+from qadaptive.action_definitions import INSERT_BLOCK, SIMPLIFY, PRUNE_TWO_QUBIT
 from qadaptive.outer_loop import OuterStepPlan, ActionSpec
 from qadaptive.mutation import TwoQMap
 
@@ -385,5 +385,119 @@ def build_single_qubit_block_plan(
         name="single_qubit_block_growth",
         actions=actions,
         acceptance_mode="outer",
+        label=label,
+    )
+
+def build_simplification_plan(
+    experiment: MutableAnsatzExperiment,
+    simplify_kwargs: dict[str, Any] | None = None,
+    label: str | None = None,
+) -> OuterStepPlan:
+    """
+    Build a macro-plan that performs a single simplification action.
+
+    Parameters
+    ----------
+    experiment : MutableAnsatzExperiment
+        Experiment instance used to access the experiment state.
+    simplify_kwargs : dict[str, Any] | None, optional
+        Keyword arguments for the simplification action.
+    label : str | None, optional
+        Optional descriptive label for the plan.
+
+    Returns
+    -------
+    OuterStepPlan
+        Simplification plan.
+    """
+    actions: list[ActionSpec] = [
+        ActionSpec(
+            action=SIMPLIFY,
+            kwargs={} if simplify_kwargs is None else dict(simplify_kwargs),
+            label="simplify",
+        )
+    ]
+
+    return OuterStepPlan(
+        name="simplification",
+        actions=actions,
+        acceptance_mode="outer",
+        label=label,
+    )
+
+def build_prune_sweep_plan(
+    experiment: MutableAnsatzExperiment,
+    gate_indices: list[int] | None = None,
+    temperature: float = 0.08,
+    alpha: float = 0.1,
+    accept_tol: float = 0.2,
+    label: str | None = None,
+) -> OuterStepPlan:
+    """
+    Build a macro-plan that performs a sweep of targeted prune attempts over
+    selected two-qubit gates.
+
+    The selected gates are stored in the plan using stable pair-occurrence
+    identifiers rather than raw circuit-data indices, so that later actions in
+    the same sweep can still target the intended gates after earlier accepted
+    removals shift circuit indices.
+
+    Parameters
+    ----------
+    experiment : MutableAnsatzExperiment
+        Experiment instance used to access the current two-qubit gate map.
+    gate_indices : list[int] | None, optional
+        Circuit-data indices of two-qubit gates to consider in the sweep.
+        If None, all currently present two-qubit gates are used.
+    temperature : float, optional
+        Temperature parameter passed to the pruning routine.
+    alpha : float, optional
+        Locking-probability scaling parameter passed to the pruning routine.
+    accept_tol : float, optional
+        Acceptance tolerance passed to the pruning routine.
+    label : str | None, optional
+        Optional descriptive label for the plan.
+
+    Returns
+    -------
+    OuterStepPlan
+        Plan that performs a prune sweep in internal-acceptance mode.
+
+    Raises
+    ------
+    ValueError
+        If any requested circuit index is not a tracked two-qubit gate.
+    """
+    if gate_indices is None:
+        gate_indices = list(sorted(experiment._2qbg_positions.keys()))
+
+    actions: list[ActionSpec] = []
+
+    for circ_ind in gate_indices:
+        if circ_ind not in experiment._2qbg_positions:
+            raise ValueError(
+                f"Circuit index {circ_ind} is not a tracked two-qubit gate."
+            )
+
+        occurrence, pair = experiment._get_pair_occurrence_from_circuit_index(circ_ind)
+
+        actions.append(
+            ActionSpec(
+                action=PRUNE_TWO_QUBIT,
+                kwargs={
+                    "target_occurrence": occurrence,
+                    "target_pair": pair,
+                    "temperature": temperature,
+                    "alpha": alpha,
+                    "accept_tol": accept_tol,
+                },
+                label=f"prune_{pair}_{occurrence}",
+            )
+        )
+
+    return OuterStepPlan(
+        name="prune_sweep",
+        actions=actions,
+        acceptance_mode="internal",
         label=label,
     )
