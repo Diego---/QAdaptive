@@ -1291,8 +1291,29 @@ class MutableAnsatzExperiment:
 
     def _action_prune_two_qubit(self, **kwargs) -> None:
         """Attempt to prune one non-locked two-qubit gate."""
+        gate_to_remove = kwargs.get("gate_to_remove")
+        
+        if gate_to_remove is None and "target_occurrence" in kwargs and "target_pair" in kwargs:
+            target_occurrence = kwargs["target_occurrence"]
+            target_pair = kwargs["target_pair"]
+            
+            gate_to_remove = self._get_circuit_index_from_pair_occurrence(
+                occurrence=target_occurrence,
+                pair=target_pair,
+            )
+            
+        if gate_to_remove is None:
+            logger.info(
+                "Skipping targeted prune because gate with pair %s and occurrence %s "
+                "no longer exists in the current ansatz.",
+                target_pair,
+                target_occurrence,
+            )
+            return
+        
         self.prune_two_qubit_gate_attempt(
             cost=kwargs["cost"],
+            gate_to_remove=gate_to_remove,
             temperature=kwargs.get("temperature", 0.08),
             alpha=kwargs.get("alpha", 0.1),
             accept_tol=kwargs.get("accept_tol", 0.2),
@@ -1687,6 +1708,7 @@ class MutableAnsatzExperiment:
     def prune_two_qubit_gate_attempt(
         self, 
         cost: Callable, 
+        gate_to_remove: int | None = None,
         temperature: float = 0.08, 
         alpha: float = 0.1, 
         accept_tol: float = 0.2
@@ -1698,6 +1720,9 @@ class MutableAnsatzExperiment:
         ----------
         cost : Callable
             Cost function with signature ``cost(params, ansatz)``.
+        gate_to_remove : int | None, optional
+            Specific circuit index of the two-qubit gate to attempt to prune. If None, 
+            a gate is chosen automatically from the non-locked two-qubit gates in the ansatz.
         temperature : float, optional
             The temperature factor for Metropolis-like acceptance probability:
             .. math::
@@ -1730,6 +1755,7 @@ class MutableAnsatzExperiment:
             temperature=temperature,
             alpha=alpha,
             accept_tol=accept_tol,
+            gate_to_remove=gate_to_remove
         )
         
         if not decision.attempted:
