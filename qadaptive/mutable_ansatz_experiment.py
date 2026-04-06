@@ -39,6 +39,7 @@ from qadaptive.outer_loop import (
     ActionSpec,
     OuterStepPlan
 )
+from qadaptive.utils import create_callback_args
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
@@ -196,6 +197,27 @@ class MutableAnsatzExperiment:
             The value to which the optimizer's iteration counter should be reset. Default is 0.
         """
         self.trainer.optimizer.last_iteration = iteration
+        
+    def _reset_inner_loop_callback(
+        self,
+        callback_builder: Callable[..., CALLBACK] | None,
+        **callback_kwargs,
+    ) -> None:
+        """Rebuild the optimizer callback and reset optimizer iteration for the next inner-loop run."""
+        if callback_builder is None:
+            return
+
+        callback_args = create_callback_args(
+            json_file_path=callback_kwargs.get("json_file_path"),
+            store_data=callback_kwargs.get("store_data", False),
+            extra_eval_freq=callback_kwargs.get("extra_eval_freq"),
+            cost_extra=callback_kwargs.get("cost_extra"),
+            plot=callback_kwargs.get("plot", True),
+            use_epoch=callback_kwargs.get("use_epoch", False),
+        )
+
+        new_callback = callback_builder(**callback_args)
+        self.reset_optimizer_callback(new_callback)
 
     def get_latest_gradients(self) -> np.ndarray:
         """
@@ -742,6 +764,7 @@ class MutableAnsatzExperiment:
         initial_point: list | np.ndarray | None = None,
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
+        callback_builder: Callable[..., CALLBACK] | None = None,
         update_parameter_memory: bool = True,
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
@@ -769,6 +792,10 @@ class MutableAnsatzExperiment:
             Optional objective for next-step evaluation during training.
         train_after_plan : bool, optional
             Whether to retrain after executing the plan.
+        callback_builder : Callable[..., CALLBACK] | None, optional
+            Factory used to rebuild the optimizer callback after each retraining phase.
+            This is useful when live-plot callbacks should be reset between outer-loop
+            steps so that each inner-loop run starts with a fresh plot/history.
         update_parameter_memory : bool, optional
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
@@ -846,6 +873,9 @@ class MutableAnsatzExperiment:
                 **train_kwargs,
             )
             cost_after = float(train_result.fun)
+            
+            self._reset_inner_loop_callback(callback_builder, **train_kwargs) # Will only reset if callback_builder is not None
+            self.reset_optimizer_iteration(0)
         else:
             if plan.acceptance_mode == "outer":
                 raise ValueError(
@@ -970,6 +1000,162 @@ class MutableAnsatzExperiment:
         self._outer_iteration += 1
 
         return result
+
+    def run_outer_loop(
+        self,
+        loss_function: Callable[[np.ndarray], float],
+        plan_schedule: list[Callable[["MutableAnsatzExperiment"], OuterStepPlan]],
+        outer_iterations: int | None = None,
+        train_iterations: int = 100,
+        initial_point: list | np.ndarray | None = None,
+        loss_next: Callable[[np.ndarray], float] | None = None,
+        train_after_plan: bool = True,
+        callback_builder: Callable[..., CALLBACK] | None = None,
+        update_parameter_memory: bool = True,
+        reuse_parameter_memory: bool = False,
+        default_value_for_new_params: float = 0.0,
+        record_parameter_memory: bool = True,
+        accept_tol: float = 0.0,
+        complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
+        stop_on_error: bool = True,
+        **train_kwargs,
+    ) -> list[OuterStepResult]:
+        """
+        Execute a sequence of outer-loop steps generated from a plan schedule.
+
+        Parameters
+        ----------
+        loss_function : Callable[[np.ndarray], float]
+            Objective function used for training and acceptance decisions.
+        plan_schedule : list[Callable[[MutableAnsatzExperiment], OuterStepPlan]]
+            Ordered list of configured plan builders. At outer iteration `n`, the
+            `n`th builder is called with the current experiment state to construct
+            the next `OuterStepPlan`. If `outer_iterations` exceeds the schedule
+            length, the last builder is reused for all remaining steps.
+        outer_iterations : int | None, optional
+            Number of outer-loop steps to execute. If None, the schedule length is
+            used.
+        train_iterations : int, optional
+            Number of inner-loop optimization steps after each executed plan.
+        initial_point : list | np.ndarray | None, optional
+            Explicit starting point for retraining.
+        loss_next : Callable[[np.ndarray], float] | None, optional
+            Optional objective for next-step evaluation during training.
+        train_after_plan : bool, optional
+            Whether to retrain after executing each plan.
+        callback_builder : Callable[..., CALLBACK] | None, optional
+            Factory used to rebuild the optimizer callback after each retraining phase.
+            This is useful when live-plot callbacks should be reset between outer-loop
+            steps so that each inner-loop run starts with a fresh plot/history.
+        update_parameter_memory : bool, optional
+            Whether to update the live parameter cache after retraining.
+        reuse_parameter_memory : bool, optional
+            Whether to use `parameter_memory` to initialize retraining when
+            `initial_point` is not provided.
+        default_value_for_new_params : float, optional
+            Default value assigned to newly introduced parameters when warm-starting.
+        record_parameter_memory : bool, optional
+            Whether to append parameter-memory records for each attempted outer step.
+        accept_tol : float, optional
+            Required score improvement threshold for generic outer acceptance.
+        complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
+            Optional penalty added to the objective in generic outer acceptance.
+        stop_on_error : bool, optional
+            If True, raise immediately when a plan builder or outer step fails.
+            If False, log the exception and stop the loop.
+        **train_kwargs
+            Additional keyword arguments forwarded to `run_outer_step`.
+
+        Returns
+        -------
+        list[OuterStepResult]
+            Results of the executed outer-loop steps.
+
+        Raises
+        ------
+        ValueError
+            If `plan_schedule` is empty or if `outer_iterations` is not positive.
+        """
+        if not plan_schedule:
+            raise ValueError("`plan_schedule` must contain at least one plan builder.")
+
+        if outer_iterations is None:
+            outer_iterations = len(plan_schedule)
+
+        if outer_iterations <= 0:
+            raise ValueError("`outer_iterations` must be positive.")
+
+        results: list[OuterStepResult] = []
+
+        logger.info(
+            "Starting outer loop for %d steps with %d scheduled plan builders.",
+            outer_iterations,
+            len(plan_schedule),
+        )
+
+        for step in range(outer_iterations):
+            builder_index = min(step, len(plan_schedule) - 1)
+            builder = plan_schedule[builder_index]
+
+            logger.info(
+                "Selecting plan builder %d for outer step %d.",
+                builder_index,
+                self._outer_iteration,
+            )
+
+            try:
+                plan = builder(self)
+            except Exception:
+                logger.exception(
+                    "Plan builder %d failed while constructing the plan for outer step %d.",
+                    builder_index,
+                    self._outer_iteration,
+                )
+                if stop_on_error:
+                    raise
+                break
+
+            logger.info(
+                "Built plan '%s' for outer step %d.",
+                plan.display_name,
+                self._outer_iteration,
+            )
+
+            try:
+                result = self.run_outer_step(
+                    loss_function=loss_function,
+                    plan=plan,
+                    train_iterations=train_iterations,
+                    initial_point=initial_point,
+                    loss_next=loss_next,
+                    train_after_plan=train_after_plan,
+                    callback_builder=callback_builder,
+                    update_parameter_memory=update_parameter_memory,
+                    reuse_parameter_memory=reuse_parameter_memory,
+                    default_value_for_new_params=default_value_for_new_params,
+                    record_parameter_memory=record_parameter_memory,
+                    accept_tol=accept_tol,
+                    complexity_penalty=complexity_penalty,
+                    **train_kwargs,
+                )
+            except Exception:
+                logger.exception(
+                    "Outer step %d failed while executing plan '%s'.",
+                    self._outer_iteration,
+                    plan.display_name,
+                )
+                if stop_on_error:
+                    raise
+                break
+
+            results.append(result)
+
+        logger.info(
+            "Finished outer loop after %d executed steps.",
+            len(results),
+        )
+
+        return results
 
     def evaluate_current_objective(
         self,
