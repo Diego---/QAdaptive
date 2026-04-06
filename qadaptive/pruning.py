@@ -99,6 +99,7 @@ def evaluate_two_qubit_gate_pruning(
     temperature: float = 0.08,
     alpha: float = 0.1,
     accept_tol: float = 0.2,
+    gate_to_remove: int | None = None,
     rng: np.random.Generator | None = None,
 ) -> PruningDecision:
     """
@@ -126,6 +127,9 @@ def evaluate_two_qubit_gate_pruning(
         Scaling factor for gate-locking probability after rejection.
     accept_tol : float, optional
         Tolerance for immediate acceptance when the trial cost is lower.
+    gate_to_remove : int | None, optional
+        Circuit-data index of a specific gate to attempt to remove. If None,
+        a random removable gate is selected for the pruning attempt.
     rng : np.random.Generator | None, optional
         Random-number generator used for gate selection and probabilistic
         acceptance. If None, a new default generator is created.
@@ -161,8 +165,29 @@ def evaluate_two_qubit_gate_pruning(
             acceptance_probability=None,
             lock_probability=None,
         )
-
-    gate_to_remove = int(rng.choice(removable_indices))
+    
+    if gate_to_remove is not None:
+        if gate_to_remove not in removable_indices:
+            logger.info(
+                "Requested gate %s is not removable. Removable gates are %s.",
+                gate_to_remove,
+                removable_indices,
+            )
+            return PruningDecision(
+                attempted=False,
+                accepted=False,
+                should_lock=False,
+                gate_to_remove=gate_to_remove,
+                trial_ansatz=None,
+                trial_cost=None,
+                current_cost=float(last_cost),
+                delta_cost=None,
+                acceptance_probability=None,
+                lock_probability=None,
+            )
+    else:
+        gate_to_remove = int(rng.choice(removable_indices))
+        
     logger.info("Selected gate at circuit index %s for pruning attempt.", gate_to_remove)
     trial_ansatz = ansatz.copy()
     trial_ansatz.data.pop(gate_to_remove)
