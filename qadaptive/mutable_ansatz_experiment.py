@@ -35,6 +35,7 @@ from qadaptive.action_definitions import (
 from qadaptive.outer_loop import (
     OuterStepResult,
     ParameterMemoryRecord,
+    AcceptedAnsatzRecord,
     ExperimentSnapshot,
     ActionSpec,
     OuterStepPlan
@@ -128,6 +129,7 @@ class MutableAnsatzExperiment:
         self.parameter_memory: dict[str, float] = {}
         self.parameter_memory_history: list[ParameterMemoryRecord] = []
         self.outer_step_history: list[OuterStepResult] = []
+        self.accepted_ansatz_history: list[AcceptedAnsatzRecord] = []
         
     def set_optimizer(
         self, optimizer: Optimizer | None = None, optimizer_options: dict | None = None
@@ -347,6 +349,26 @@ class MutableAnsatzExperiment:
                 accepted=accepted,
                 values=dict(self.parameter_memory),
                 cost=cost,
+            )
+        )
+        
+    def _record_accepted_ansatz(
+        self,
+        action: str,
+        cost: float | None,
+        note: str | None = None,
+    ) -> None:
+        """Append the current accepted trained ansatz to history."""
+        self.accepted_ansatz_history.append(
+            AcceptedAnsatzRecord(
+                outer_iteration=self._outer_iteration,
+                action=action,
+                cost=cost,
+                num_parameters=self.ansatz.num_parameters,
+                num_two_qubit_gates=len(self._2qbg_positions),
+                ansatz=self.ansatz.copy(),
+                parameter_values=self.get_current_parameter_dict(),
+                note=note,
             )
         )
 
@@ -918,6 +940,12 @@ class MutableAnsatzExperiment:
                         accepted=True,
                         cost=cost_after,
                     )
+                    
+                self._record_accepted_ansatz(
+                    action=plan.display_name,
+                    cost=cost_after,
+                    note=note
+                )
             else:
                 
                 logger.info(
@@ -963,6 +991,13 @@ class MutableAnsatzExperiment:
                         values=trial_parameter_memory,
                         cost=cost_after,
                     )
+                )
+                
+            if accepted:
+                self._record_accepted_ansatz(
+                    action=plan.display_name,
+                    cost=cost_after,
+                    note=note
                 )
         else:
             raise ValueError(
