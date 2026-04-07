@@ -692,6 +692,83 @@ class MutableAnsatzExperiment:
 
         if reset_locked_gates:
             self.locked_gates = set()
+            
+    def _reconcile_initial_point_after_structure_change(
+        self,
+        initial_point: list[float] | np.ndarray | None,
+        params_before: list[Parameter],
+        default_value_for_new_params: float = 0.0,
+    ) -> np.ndarray | None:
+        """
+        Reconcile an explicitly provided initial point with the current ansatz
+        after a structural change.
+
+        Parameters
+        ----------
+        initial_point : list[float] | np.ndarray | None
+            User-provided initial point defined either on the pre-change ansatz or
+            already on the current ansatz.
+        params_before : list[Parameter]
+            Ordered parameter list of the ansatz before the structural actions.
+        default_value_for_new_params : float, optional
+            Value assigned to newly introduced parameters that were not present in
+            `params_before`.
+
+        Returns
+        -------
+        np.ndarray | None
+            Initial point compatible with the current ansatz, or None if no initial
+            point was provided.
+
+        Raises
+        ------
+        ValueError
+            If the provided vector matches neither the pre-change nor the current
+            parameter count.
+        """
+        if initial_point is None:
+            return None
+
+        x = np.asarray(initial_point, dtype=float)
+        params_after = self._ordered_current_parameters()
+
+        if len(x) == len(params_after):
+            return x
+
+        if len(x) != len(params_before):
+            raise ValueError(
+                "Provided `initial_point` is incompatible with both the pre-change "
+                f"ansatz ({len(params_before)} parameters) and the current ansatz "
+                f"({len(params_after)} parameters)."
+            )
+
+        value_map = {
+            param.name: float(value)
+            for param, value in zip(params_before, x)
+        }
+        
+        before_names = {param.name for param in params_before}
+        after_names = {param.name for param in params_after}
+        
+        added_names = sorted(after_names - before_names)
+        removed_names = sorted(before_names - after_names)
+        retained_names = sorted(before_names & after_names)
+        
+        logger.debug(
+            "Retained parameters (%d): %s", 
+            len(retained_names),
+            retained_names
+            )
+        logger.info("Added parameters after structural change: %s", added_names)
+        logger.info("Removed parameters after structural change: %s", removed_names)
+
+        return np.asarray(
+            [
+                value_map.get(param.name, default_value_for_new_params)
+                for param in params_after
+            ],
+            dtype=float,
+        )
         
     def lock_gates(self, gates_to_lock: list[int]) -> None:
         """
@@ -759,6 +836,10 @@ class MutableAnsatzExperiment:
             initial_point = self.build_warm_start_initial_point(
                 default_value_for_new_params=default_value_for_new_params
             )
+            logger.info(
+                "Built initial point from parameter memory for training: %s",
+                initial_point,
+            )
         
         current_ansatz = self.adaptive_ansatz.get_current_ansatz()
         result = self.trainer.train_one_time(
@@ -775,6 +856,10 @@ class MutableAnsatzExperiment:
             
         if update_parameter_memory:
             self._store_parameter_values(result.x)
+            logger.debug(
+                "Updated parameter memory with %d active parameters.",
+                len(self.parameter_memory),
+                )
             
         return result
     
@@ -849,6 +934,7 @@ class MutableAnsatzExperiment:
         snapshot = self._snapshot_state()
 
         ansatz_before = snapshot.ansatz.copy()
+        params_before = self._ordered_current_parameters()
         num_parameters_before = ansatz_before.num_parameters
         num_two_qubit_before = len(snapshot.two_q_map)
 
@@ -884,9 +970,15 @@ class MutableAnsatzExperiment:
                 train_iterations,
             )
             
+            reconciled_initial_point = self._reconcile_initial_point_after_structure_change(
+                initial_point=initial_point,
+                params_before=params_before,
+                default_value_for_new_params=default_value_for_new_params,
+            )
+            
             train_result = self.train_one_time(
                 loss_function=loss_function,
-                initial_point=initial_point,
+                initial_point=reconciled_initial_point,
                 loss_next=loss_next,
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
@@ -1686,6 +1778,7 @@ class MutableAnsatzExperiment:
 
         self._sync_after_ansatz_change()
         logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
+        logger.info(f"New number of parameters: {self.ansatz.num_parameters}.")
 
     def simplify_transpiler_passes(
         self,
@@ -1717,8 +1810,7 @@ class MutableAnsatzExperiment:
         )
 
         self.adaptive_ansatz.current_ansatz = result.circuit
-        self._update_ansatz()
-        self._2qbg_positions = result.new_two_q_map
+        self._sync_after_ansatz_change()
 
         if not result.preserve_locked_gates and reset_locks_on_ambiguity:
             logger.info(
