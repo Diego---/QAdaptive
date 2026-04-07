@@ -12,7 +12,7 @@ from qae.optimization.my_spsa import SPSA
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
 
-logger = logging.getLogger("qadaptive.training.trainer")
+logger = logging.getLogger(__name__)
 
 class InnerLoopTrainer:
     """

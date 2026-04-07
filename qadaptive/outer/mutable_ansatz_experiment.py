@@ -7,9 +7,9 @@ from qiskit.circuit import QuantumCircuit, Parameter
 from qiskit.transpiler import PassManager
 from qiskit_algorithms.optimizers.optimizer import Optimizer, OptimizerResult
 
-from qadaptive.adaptive_ansatz import AdaptiveAnsatz
-from qadaptive.trainer import InnerLoopTrainer
-from qadaptive.mutation import (
+from qadaptive.core.adaptive_ansatz import AdaptiveAnsatz
+from qadaptive.training.trainer import InnerLoopTrainer
+from qadaptive.core.mutation import (
     get_two_qubit_gate_indices,
     get_pair_occurrence_from_circuit_index,
     get_circuit_index_from_pair_occurrence,
@@ -22,9 +22,9 @@ from qadaptive.mutation import (
     update_locked_gates_on_multiple_inserts,
     TwoQMap, LockId
 )
-from qadaptive.simplification import simplify_ansatz
-from qadaptive.pruning import evaluate_two_qubit_gate_pruning
-from qadaptive.action_definitions import (
+from qadaptive.core.simplification import simplify_ansatz
+from qadaptive.core.pruning import evaluate_two_qubit_gate_pruning
+from qadaptive.outer.action_definitions import (
     INSERT_RANDOM_GATE,
     INSERT_GATE,
     INSERT_BLOCK,
@@ -32,7 +32,7 @@ from qadaptive.action_definitions import (
     SIMPLIFY,
     PRUNE_TWO_QUBIT,
 )
-from qadaptive.outer_loop import (
+from qadaptive.outer.outer_loop import (
     OuterStepResult,
     ParameterMemoryRecord,
     AcceptedAnsatzRecord,
@@ -40,12 +40,12 @@ from qadaptive.outer_loop import (
     ActionSpec,
     OuterStepPlan
 )
-from qadaptive.utils import create_callback_args
+from qadaptive.utils.utils import create_callback_args
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
 
-logger = logging.getLogger("qadaptive.outer.mutable_ansatz_experiment")
+logger = logging.getLogger(__name__)
 
 class MutableAnsatzExperiment:
     """

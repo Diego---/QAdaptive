@@ -7,9 +7,9 @@ import pytest
 from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector
 
-from qadaptive.adaptive_ansatz import AdaptiveAnsatz
+from qadaptive.core.adaptive_ansatz import AdaptiveAnsatz
 from qae.optimization.my_spsa import SPSA
-from qadaptive.trainer import InnerLoopTrainer
+from qadaptive.training.trainer import InnerLoopTrainer
 
 class DummyOptimizer:
     def __init__(self, step_size: float = 0.1):

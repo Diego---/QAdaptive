@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from qiskit import QuantumCircuit
 from qiskit.transpiler import PassManager
 
-from qadaptive.mutation import get_two_qubit_gate_indices
-from qadaptive.utils import custom_pass_manager
+from qadaptive.core.mutation import get_two_qubit_gate_indices
+from qadaptive.utils.utils import custom_pass_manager
 
 logger = logging.getLogger("qadaptive.core.simplification")
 

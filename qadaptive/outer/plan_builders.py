@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 import random
-
 from collections import Counter
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 
-from qadaptive import MutableAnsatzExperiment
-from qadaptive.action_definitions import INSERT_BLOCK, SIMPLIFY, PRUNE_TWO_QUBIT
-from qadaptive.outer_loop import OuterStepPlan, ActionSpec
-from qadaptive.mutation import TwoQMap
+from qadaptive.outer.action_definitions import INSERT_BLOCK, SIMPLIFY, PRUNE_TWO_QUBIT
+from qadaptive.outer.outer_loop import OuterStepPlan, ActionSpec
+from qadaptive.core.mutation import TwoQMap
+
+if TYPE_CHECKING:
+    from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
 
 
 def default_append_index_policy(experiment, target, insertion_number: int) -> int:

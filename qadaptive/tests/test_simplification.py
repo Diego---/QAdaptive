@@ -2,7 +2,7 @@ from qiskit import QuantumCircuit
 from qiskit.transpiler import PassManager
 from qiskit.transpiler.passes import RemoveBarriers
 
-from qadaptive.simplification import (
+from qadaptive.core.simplification import (
     build_pass_manager,
     can_preserve_locked_gates_trivially,
     simplify_ansatz,

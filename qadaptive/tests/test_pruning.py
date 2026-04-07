@@ -1,8 +1,8 @@
 import numpy as np
 from qiskit import QuantumCircuit
 
-from qadaptive.mutation import get_pair_occurrence_from_circuit_index, get_two_qubit_gate_indices, is_locked_circuit_index
-from qadaptive.pruning import evaluate_two_qubit_gate_pruning, get_removable_two_qubit_gate_indices
+from qadaptive.core.mutation import get_pair_occurrence_from_circuit_index, get_two_qubit_gate_indices, is_locked_circuit_index
+from qadaptive.core.pruning import evaluate_two_qubit_gate_pruning, get_removable_two_qubit_gate_indices
 
 
 class StubRNG:

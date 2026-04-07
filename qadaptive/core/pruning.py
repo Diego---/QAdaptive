@@ -5,9 +5,9 @@ from typing import Callable
 import numpy as np
 from qiskit import QuantumCircuit
 
-from qadaptive.mutation import TwoQMap, LockId
+from qadaptive.core.mutation import TwoQMap, LockId
 
-logger = logging.getLogger("qadaptive.core.pruning")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

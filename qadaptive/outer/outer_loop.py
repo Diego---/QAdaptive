@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 
 from qiskit.circuit import QuantumCircuit
 
-from qadaptive.mutation import TwoQMap, LockId
-from qadaptive.action_definitions import ACTION_DEFINITIONS, ActionDefinition
+from qadaptive.core.mutation import TwoQMap, LockId
+from qadaptive.outer.action_definitions import ACTION_DEFINITIONS, ActionDefinition
 
 AcceptanceMode = Literal["outer", "internal", "force"]
 
