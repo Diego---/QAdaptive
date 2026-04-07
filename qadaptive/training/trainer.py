@@ -7,7 +7,7 @@ import numpy as np
 from qiskit import QuantumCircuit
 from qiskit_algorithms.optimizers.optimizer import Optimizer, OptimizerResult
 
-from qae.optimization.my_spsa import SPSA
+from .spsa import SPSA
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
