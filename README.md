@@ -166,7 +166,17 @@ from qadaptive import AdaptiveAnsatz
 from qadaptive.trainer import InnerLoopTrainer
 from qadaptive.mutable_ansatz_experiment import MutableAnsatzExperiment
 from qadaptive.utils import custom_pass_manager
-from your_optimizer_module import SPSA
+from qadaptive.action_definitions import (
+    INSERT_RANDOM_GATE,
+    INSERT_GATE,
+    INSERT_BLOCK,
+    REMOVE_GATE,
+    SIMPLIFY,
+    PRUNE_TWO_QUBIT,
+    ACTION_DEFINITIONS, ActionDefinition
+)
+from qadaptive.outer_loop import ActionSpec, OuterStepPlan
+from qae.my_spsa import SPSA
 
 # Example: create a starting ansatz
 adaptive_ansatz = AdaptiveAnsatz(QuantumCircuit(2))
@@ -207,6 +217,38 @@ mo.train_one_time(
     initial_point=random_initial_point,
     iterations=100,
 )
+
+# Define actions and an action plan
+actions = [
+    ActionSpec(
+        action=INSERT_BLOCK,
+        kwargs={
+            'block_name': 'cx_identity',
+            'qubits': [0, 1],
+            'circ_ind': 0
+        }
+    ),
+    ActionSpec(
+        action=INSERT_BLOCK,
+        kwargs={
+            'block_name': 'cz_identity',
+            'qubits': [0, 1],
+            'circ_ind': 3
+        }
+    ),
+    ActionSpec(
+        action=SIMPLIFY,
+        kwargs={
+            'pass_manager': pass_manager
+        }
+    )
+]
+
+outer_plan = OuterStepPlan(
+    name="Initial Growth",
+    actions=actions,
+    acceptance_mode='outer',
+)
 ```
 
 Note: full training paths currently rely on a compatible optimizer API (notably the external SPSA implementation referenced above).
@@ -243,6 +285,10 @@ Note: full training paths currently rely on a compatible optimizer API (notably 
 - **Training**
   - `trainer.py` handles parameter optimization for a fixed circuit structure.
   - `mutable_ansatz_experiment.py` sits one level above that and coordinates optimization together with ansatz mutation.
+
+- **Outer Loop**
+  - `action_definitions.py` gives the available actions to take on the ansatz of a MutableAnsatzExperiment object.
+  - `outer_loop.py` defines atomic actions to be taken by an outer loop plan.
 
 - **Applications**
   - `applications.py` is intended for problem-specific composition, such as VQE, QNN, or QAE workflows, where the mutable ansatz may be prepended or appended to other circuits.

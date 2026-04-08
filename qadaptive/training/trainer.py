@@ -7,7 +7,7 @@ import numpy as np
 from qiskit import QuantumCircuit
 from qiskit_algorithms.optimizers.optimizer import Optimizer, OptimizerResult
 
-from qae.optimization.my_spsa import SPSA
+from .spsa import SPSA
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
@@ -21,20 +21,21 @@ class InnerLoopTrainer:
     This class encapsulates the optimizer-facing logic that performs parameter
     updates for a fixed ansatz structure. It is currently designed around the
     custom SPSA implementation used in this project.
-
-    Parameters
+    
+    Attributes
     ----------
-    optimizer : Optimizer | None, optional
-        Pre-initialized optimizer instance. If provided, it is used directly.
-    optimizer_options : dict | None, optional
-        Keyword arguments used to initialize the custom SPSA optimizer when
-        `optimizer` is not provided.
-    track_gradients : bool, optional
+    optimizer : Optimizer
+        Optimizer instance used for training. It can be set at initialization 
+        or later via `set_optimizer`.
+    track_gradients : bool
         Whether to store gradient estimates during training.
-    callback : CALLBACK | list[CALLBACK] | None, optional
+    callback : CALLBACK | list[CALLBACK] | None
         One callback or a list of callbacks to be run after each accepted step.
-    termination_checker : TERMINATIONCHECKER | None, optional
+    termination_checker : TERMINATIONCHECKER | None
         Optional termination checker called during training.
+    gradient_history : dict[int, list[np.ndarray]] | None
+        History of gradient estimates for each training repetition, indexed by the 
+        repetition count. Only populated if `track_gradients` is True.
 
     Notes
     -----
@@ -51,6 +52,23 @@ class InnerLoopTrainer:
         callback: CALLBACK | list[CALLBACK] | None = None,
         termination_checker: TERMINATIONCHECKER | None = None,
     ) -> None:
+        """
+        Initialize an instance of an inner-loop trainer.
+
+        Parameters
+        ----------
+        optimizer : Optimizer | None, optional
+            Pre-initialized optimizer instance. If provided, it is used directly.
+        optimizer_options : dict | None, optional
+            Keyword arguments used to initialize the custom SPSA optimizer when
+            `optimizer` is not provided.
+        track_gradients : bool, optional
+            Whether to store gradient estimates during training.
+        callback : CALLBACK | list[CALLBACK] | None, optional
+            One callback or a list of callbacks to be run after each accepted step.
+        termination_checker : TERMINATIONCHECKER | None, optional
+            Optional termination checker called during training.
+        """
         assert (
             optimizer is not None or optimizer_options is not None
         ), "Provide at least a pre-initialized optimizer or options to initialize a new one."
@@ -207,6 +225,7 @@ class InnerLoopTrainer:
             gradient_estimate,
             x,
             fx_estimate,
+            loss_function,
             loss_next,
             iteration_start,
             self._inner_iteration,

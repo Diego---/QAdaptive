@@ -3,7 +3,7 @@ from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector
 from qiskit.quantum_info import Operator
 
-from qadaptive.operator_pool import DEFAULT_BLOCK_POOL, PoolBlock
+from qadaptive.core.operator_pool import DEFAULT_BLOCK_POOL, PoolBlock
 
 
 

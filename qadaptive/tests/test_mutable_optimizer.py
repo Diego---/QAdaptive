@@ -3,9 +3,9 @@ import pytest
 from qiskit.circuit import QuantumCircuit, ParameterVector
 
 from qae.optimization.my_spsa import SPSA
-from qadaptive.adaptive_ansatz import AdaptiveAnsatz
-from qadaptive.trainer import InnerLoopTrainer
-from qadaptive.mutable_ansatz_experiment import MutableAnsatzExperiment
+from qadaptive.core.adaptive_ansatz import AdaptiveAnsatz
+from qadaptive.training.trainer import InnerLoopTrainer
+from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
 
 th = ParameterVector("t", 10)
 tiny_ansatz = QuantumCircuit(3)

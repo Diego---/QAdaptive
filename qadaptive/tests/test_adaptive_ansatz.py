@@ -4,8 +4,8 @@ import numpy as np
 from qiskit.circuit import QuantumCircuit, ParameterVector
 from qiskit.quantum_info import Operator
 
-from qadaptive.adaptive_ansatz import AdaptiveAnsatz
-from qadaptive.operator_pool import DEFAULT_BLOCK_POOL
+from qadaptive.core.adaptive_ansatz import AdaptiveAnsatz
+from qadaptive.core.operator_pool import DEFAULT_BLOCK_POOL
 
 
 # -----------------------------------------------------------------------------

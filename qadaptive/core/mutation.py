@@ -2,7 +2,7 @@ import logging
 
 from qiskit import QuantumCircuit
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qadaptive.core.mutation")
 
 LockId = tuple[int, tuple[int, int]]
 TwoQMap = dict[int, tuple[int, int]]

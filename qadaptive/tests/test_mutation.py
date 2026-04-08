@@ -1,7 +1,7 @@
 import pytest
 from qiskit import QuantumCircuit
 
-from qadaptive.mutation import (
+from qadaptive.core.mutation import (
     get_circuit_index_from_pair_occurrence,
     get_locked_circuit_indices,
     get_pair_occurrence_from_circuit_index,

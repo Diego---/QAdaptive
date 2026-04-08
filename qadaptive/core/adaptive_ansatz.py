@@ -5,7 +5,7 @@ from qiskit.circuit import Parameter, CircuitInstruction, Qubit
 from qiskit.transpiler.passes import RemoveBarriers
 from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 
-from qadaptive.operator_pool import DEFAULT_BLOCK_POOL, PoolBlock
+from qadaptive.core.operator_pool import DEFAULT_BLOCK_POOL, PoolBlock
 
 logger = logging.getLogger(__name__)
 
