@@ -1289,6 +1289,7 @@ class MutableAnsatzExperiment:
                     loss_next=loss_next,
                     train_after_plan=train_after_plan,
                     callback_builder=callback_builder,
+                    callback_kwargs=callback_kwargs,
                     update_parameter_memory=update_parameter_memory,
                     reuse_parameter_memory=reuse_parameter_memory,
                     default_value_for_new_params=default_value_for_new_params,
