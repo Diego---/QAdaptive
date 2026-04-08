@@ -867,7 +867,7 @@ class SPSA(StepwiseOptimizer):
             Tuple ``(skip, x_next, fx_next, gradient_estimate, fx_estimate)``.
         """
         if not self._initialized:
-            self.initialize(np.asarray(x, dtype=float), loss_function, **kwargs)
+            self.initialize(np.asarray(x, dtype=float), loss_function, iteration_start=self.iteration, **kwargs)
 
         x = np.asarray(x, dtype=float)
         next_iteration = self.iteration + 1
@@ -935,7 +935,7 @@ class SPSA(StepwiseOptimizer):
         del jac, bounds
 
         x = np.asarray(x0, dtype=float)
-        self.initialize(x, fun, **kwargs)
+        self.initialize(x, fun, self.iteration, **kwargs)
         start_time = time()
 
         last_steps = deque([x])

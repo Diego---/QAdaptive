@@ -198,7 +198,7 @@ class MutableAnsatzExperiment:
         iteration : int, optional
             The value to which the optimizer's iteration counter should be reset. Default is 0.
         """
-        self.trainer.optimizer.last_iteration = iteration
+        self.trainer.optimizer.reset_runtime_state(iteration)
         
     def _reset_inner_loop_callback(
         self,

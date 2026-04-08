@@ -299,6 +299,8 @@ class InnerLoopTrainer:
 
         if initial_point is None:
             initial_point = [random.choice([-1, 1]) for _ in range(ansatz.num_parameters)]
+            
+        logger.info("Initial point: %s", initial_point)
 
         x = np.asarray(initial_point, dtype=float)
         loss_kwargs = {**kwargs, "ansatz": ansatz}
