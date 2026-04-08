@@ -225,6 +225,7 @@ class InnerLoopTrainer:
             gradient_estimate,
             x,
             fx_estimate,
+            loss_function,
             loss_next,
             iteration_start,
             self._inner_iteration,
