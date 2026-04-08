@@ -872,6 +872,7 @@ class MutableAnsatzExperiment:
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
         callback_builder: Callable[..., CALLBACK] | None = None,
+        callback_kwargs: dict | None = None,
         update_parameter_memory: bool = True,
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
@@ -903,6 +904,8 @@ class MutableAnsatzExperiment:
             Factory used to rebuild the optimizer callback after each retraining phase.
             This is useful when live-plot callbacks should be reset between outer-loop
             steps so that each inner-loop run starts with a fresh plot/history.
+        callback_kwargs : dict | None, optional
+            Keyword arguments forwarded to `callback_builder` when rebuilding the callback.
         update_parameter_memory : bool, optional
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
@@ -988,7 +991,10 @@ class MutableAnsatzExperiment:
             )
             cost_after = float(train_result.fun)
             
-            self._reset_inner_loop_callback(callback_builder, **train_kwargs) # Will only reset if callback_builder is not None
+            self._reset_inner_loop_callback(
+                callback_builder,
+                **({} if callback_kwargs is None else callback_kwargs)
+                ) # Will only reset if callback_builder is not None
             self.reset_optimizer_iteration(0)
         else:
             if plan.acceptance_mode == "outer":
@@ -1161,6 +1167,7 @@ class MutableAnsatzExperiment:
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
         callback_builder: Callable[..., CALLBACK] | None = None,
+        callback_kwargs: dict | None = None,
         update_parameter_memory: bool = True,
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
@@ -1197,6 +1204,8 @@ class MutableAnsatzExperiment:
             Factory used to rebuild the optimizer callback after each retraining phase.
             This is useful when live-plot callbacks should be reset between outer-loop
             steps so that each inner-loop run starts with a fresh plot/history.
+        callback_kwargs : dict | None, optional
+            Keyword arguments forwarded to `callback_builder` when rebuilding the callback.
         update_parameter_memory : bool, optional
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
