@@ -523,7 +523,7 @@ class MutableAnsatzExperiment:
         current_names = {p.name for p in self._current_parameters()}
         param_dict = {
             name: value
-            for name, value in self.parameter_memory.items()
+            for name, value in self.parameter_memory.dictionary.items()
             if name in current_names
         }
         
@@ -1766,10 +1766,11 @@ class MutableAnsatzExperiment:
         self.adaptive_ansatz.add_gate_at_index(gate, circ_ind, qubits)
         logger.info(f"Inserted {gate} gate on qubits {qubits} at position {circ_ind}.")
             
-        self._sync_after_ansatz_change()
         if len(qubits) == 2:
             self._update_locked_gates_on_insert(circ_ind)
             logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
+            
+        self._sync_after_ansatz_change()
 
     def remove_at(
         self, circ_ind: int
@@ -1798,10 +1799,11 @@ class MutableAnsatzExperiment:
             
         self.adaptive_ansatz.remove_gate_by_index(circ_ind)
         
-        self._sync_after_ansatz_change()
         if is_2qbg:
             self._update_locked_gates_on_removal(circ_ind)
             logger.info("Updated 2Q positions after removal: %s", self._2qbg_positions)
+            
+        self._sync_after_ansatz_change()
         
     def insert_block_at(
         self,

@@ -263,7 +263,7 @@ class OuterStepPlan:
 
         if self.acceptance_mode not in ("outer", "internal", "force"):
             raise ValueError(
-                "`acceptance_mode` must be either 'outer' or 'internal'."
+                "`acceptance_mode` must be either 'outer', 'internal' or 'force'."
             )
 
         if len(self.actions) == 0:

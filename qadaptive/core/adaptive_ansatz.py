@@ -38,7 +38,7 @@ class AdaptiveAnsatz:
             Whether to keep track of previous ansatz versions (default: True).
         operator_pool : list[str], optional
             List of quantum instruction names from which to sample to mutate the ansatz.
-            Defaults to None and the default pool ['rx', 'ry', 'rz', 'rzz'] is used.
+            Defaults to None and the default pool ['rx', 'ry', 'rz', 'cz'] is used.
         """
         
         if operator_pool is None:
