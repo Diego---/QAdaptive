@@ -764,6 +764,7 @@ class MutableAnsatzExperiment:
         loss_next: Callable[[np.ndarray], float] | None = None,
         iterations: int = 100,
         update_parameter_memory: bool = True,
+        trainer_iteration_reset: int | None = None,
         **kwargs
         ) -> OptimizerResult:
         """
@@ -788,6 +789,8 @@ class MutableAnsatzExperiment:
         default_value_for_new_params : float, optional
             Default value assigned to current parameters that are not yet present in
             `parameter_memory` when warm-starting a run.
+        trainer_iteration_reset : int | None, optional
+            If not None, the optimizer's iteration counter is reset to this value after training.
         **kwargs
             Additional configuration. Currently supports:
             - `use_epochs`
@@ -807,6 +810,7 @@ class MutableAnsatzExperiment:
             initial_point=initial_point,
             loss_next=loss_next,
             iterations=iterations,
+            iteration_start=trainer_iteration_reset,
             **kwargs,
         )
         
@@ -821,9 +825,11 @@ class MutableAnsatzExperiment:
                 )
             
         logger.debug(
-            "Completed training with final cost %.10f and parameters %s",
+            "Completed training with final cost %.10f and parameters %s"
+            " in %d inner iterations.",
             result.fun,
-            result.x
+            result.x,
+            self.trainer._last_num_iterations,
             )
             
         return result
@@ -909,7 +915,6 @@ class MutableAnsatzExperiment:
         snapshot = self._snapshot_state()
 
         ansatz_before = snapshot.ansatz.copy()
-        params_before = self._current_parameters()
         num_parameters_before = ansatz_before.num_parameters
         num_two_qubit_before = len(snapshot.two_q_map)
 
@@ -968,6 +973,7 @@ class MutableAnsatzExperiment:
                 loss_next=loss_next,
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
+                trainer_iteration_reset=trainer_iteration_reset,
                 **train_kwargs,
             )
             cost_after = float(train_result.fun)
@@ -976,7 +982,6 @@ class MutableAnsatzExperiment:
                 callback_builder,
                 **({} if callback_kwargs is None else callback_kwargs)
                 ) # Will only reset if callback_builder is not None
-            self.reset_optimizer_iteration(trainer_iteration_reset)
         else:
             if plan.acceptance_mode == "outer":
                 raise ValueError(
@@ -1276,6 +1281,7 @@ class MutableAnsatzExperiment:
                 loss_next=loss_next,
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
+                trainer_iteration_reset=trainer_iteration_reset,
                 **train_kwargs,
             )
                             
@@ -1283,7 +1289,6 @@ class MutableAnsatzExperiment:
                 callback_builder,
                 **({} if callback_kwargs is None else callback_kwargs)
                 ) # Will only reset if callback_builder is not None
-            self.reset_optimizer_iteration(trainer_iteration_reset)
             
             if record_parameter_memory:
                 self._record_parameter_memory(
@@ -1888,6 +1893,10 @@ class MutableAnsatzExperiment:
         QuantumCircuit
             Simplified circuit.
         """
+        logger.info(
+            "Starting ansatz simplification with transpiler passes for %d repetitions.",
+             repetitions
+        )
         result = simplify_ansatz(
             circuit=self.adaptive_ansatz.current_ansatz,
             pass_manager=pass_manager,

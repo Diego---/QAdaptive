@@ -479,6 +479,9 @@ class SPSA(StepwiseOptimizer):
                 self.learning_rate,
             )
 
+        logger.info(
+            "Creating SPSA iterators starting at index %d.", n_start
+        )
         eta = get_eta(n_start=n_start)
         eps = get_eps(n_start=n_start)
         self.lr_iterator, self._lr_iterator_copy = itertools.tee(eta)
@@ -509,7 +512,8 @@ class SPSA(StepwiseOptimizer):
         x0 = np.asarray(x0, dtype=float)
 
         if iteration_start is None:
-            iteration_start = self.start_point
+            iteration_start = self._iteration if self._initialized else self.start_point
+
 
         self.reset_runtime_state(iteration_start=iteration_start)
         self._steps_in_run = 0

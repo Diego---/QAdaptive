@@ -85,6 +85,7 @@ class InnerLoopTrainer:
         self._times_trained = 0
         self._last_cost = 0.0
         self._last_params = np.array([], dtype=float)
+        self._last_num_iterations = 0
 
     @property
     def last_cost(self) -> float:
@@ -283,7 +284,9 @@ class InnerLoopTrainer:
         iteration_start : int | None, optional
             Optional starting iteration index passed to the optimizer
             initialization. Useful for continuation runs with schedule-based
-            optimizers such as SPSA.
+            optimizers such as SPSA. If None, it will default to the optimizers
+            initial step or the current iteration count if the optimizer has
+            already been initialized.
         **kwargs
             Additional keyword arguments forwarded to the objective.
 
@@ -394,5 +397,6 @@ class InnerLoopTrainer:
 
         self._last_cost = result.fun
         self._last_params = np.asarray(x, dtype=float)
+        self._last_num_iterations = k
 
         return result
