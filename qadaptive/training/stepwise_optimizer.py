@@ -94,7 +94,7 @@ class StepwiseOptimizer(Optimizer, ABC):
             ``(skip, x_next, fx_next, gradient_estimate, fx_estimate)``
         """
 
-    def reset_runtime_state(self, iteration_start: int = 0) -> None:
+    def reset_runtime_state(self, iteration_start: int | None = 0) -> None:
         """
         Reset generic runtime bookkeeping for a new optimization run.
 
@@ -106,7 +106,7 @@ class StepwiseOptimizer(Optimizer, ABC):
 
         Parameters
         ----------
-        iteration_start : int, optional
+        iteration_start : int | None, optional
             The iteration index to start from. Defaults to 0.
 
             - For optimizers with iteration-dependent schedules (e.g., SPSA),
@@ -114,6 +114,8 @@ class StepwiseOptimizer(Optimizer, ABC):
             learning-rate / perturbation sequences.
             - For optimizers without such schedules (e.g., ADAM), this parameter
             has no practical effect beyond bookkeeping.
+            
+            If None, the iteration counter is not reset and retains its current value.
 
         Notes
         -----
@@ -122,10 +124,17 @@ class StepwiseOptimizer(Optimizer, ABC):
         should override or extend initialization behavior in ``initialize(...)``
         if such state needs to be reset or preserved.
         """
-        logger.info(
-            "Resetting optimizer runtime state for new optimization run from iteration %d.",
-            iteration_start
-            )
+        
+        if iteration_start is not None:
+            logger.info(
+                "Resetting optimizer runtime state for new optimization run from iteration %d.",
+                iteration_start
+                )
+        else:
+            logger.info(
+                "Resetting optimizer runtime state for new optimization run without changing iteration counter (currently at %d).",
+                self._iteration
+                )
         self._nfev = 0
         self._nextfev = 0
         self._initialized = False
@@ -134,4 +143,4 @@ class StepwiseOptimizer(Optimizer, ABC):
         self._last_gradient = None
         self._last_fx = None
 
-        self._iteration = iteration_start
+        self._iteration = iteration_start if iteration_start is not None else self._iteration
