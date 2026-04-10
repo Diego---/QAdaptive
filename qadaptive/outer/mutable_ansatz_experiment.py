@@ -740,83 +740,6 @@ class MutableAnsatzExperiment:
         if reset_locked_gates:
             self.locked_gates = set()
             
-    def _reconcile_initial_point_after_structure_change(
-        self,
-        initial_point: list[float] | np.ndarray | None,
-        params_before: list[Parameter],
-        default_value_for_new_params: float = 0.0,
-    ) -> np.ndarray | None:
-        """
-        Reconcile an explicitly provided initial point with the current ansatz
-        after a structural change.
-
-        Parameters
-        ----------
-        initial_point : list[float] | np.ndarray | None
-            User-provided initial point defined either on the pre-change ansatz or
-            already on the current ansatz.
-        params_before : list[Parameter]
-            Ordered parameter list of the ansatz before the structural actions.
-        default_value_for_new_params : float, optional
-            Value assigned to newly introduced parameters that were not present in
-            `params_before`.
-
-        Returns
-        -------
-        np.ndarray | None
-            Initial point compatible with the current ansatz, or None if no initial
-            point was provided.
-
-        Raises
-        ------
-        ValueError
-            If the provided vector matches neither the pre-change nor the current
-            parameter count.
-        """
-        if initial_point is None:
-            return None
-
-        x = np.asarray(initial_point, dtype=float)
-        params_after = self._current_parameters()
-
-        if len(x) == len(params_after):
-            return x
-
-        if len(x) != len(params_before):
-            raise ValueError(
-                "Provided `initial_point` is incompatible with both the pre-change "
-                f"ansatz ({len(params_before)} parameters) and the current ansatz "
-                f"({len(params_after)} parameters)."
-            )
-
-        value_map = {
-            param.name: float(value)
-            for param, value in zip(params_before, x)
-        }
-        
-        before_names = {param.name for param in params_before}
-        after_names = {param.name for param in params_after}
-        
-        added_names = sorted(after_names - before_names)
-        removed_names = sorted(before_names - after_names)
-        retained_names = sorted(before_names & after_names)
-        
-        logger.debug(
-            "Retained parameters (%d): %s", 
-            len(retained_names),
-            retained_names
-            )
-        logger.info("Added parameters after structural change: %s", added_names)
-        logger.info("Removed parameters after structural change: %s", removed_names)
-
-        return np.asarray(
-            [
-                value_map.get(param.name, default_value_for_new_params)
-                for param in params_after
-            ],
-            dtype=float,
-        )
-        
     def lock_gates(self, gates_to_lock: list[int]) -> None:
         """
         Lock two-qubit gates specified by their circuit-data indices.
@@ -841,8 +764,6 @@ class MutableAnsatzExperiment:
         loss_next: Callable[[np.ndarray], float] | None = None,
         iterations: int = 100,
         update_parameter_memory: bool = True,
-        reuse_parameter_memory: bool = True,
-        default_value_for_new_params: float = 0.0,
         **kwargs
         ) -> OptimizerResult:
         """
@@ -879,21 +800,6 @@ class MutableAnsatzExperiment:
             The result of the optimization.
         """
         
-        if reuse_parameter_memory and self.parameter_memory:
-            if initial_point is not None:
-                logger.warning(
-                    "Both `initial_point` and `parameter_memory` are provided. "
-                    "The provided `initial_point` will be ignored, and `parameter_memory` "
-                    "will be used to warm-start."
-                )
-            initial_point = self.build_warm_start_initial_point(
-                default_value_for_new_params=default_value_for_new_params
-            )
-            logger.info(
-                "Built initial point from parameter memory for training: %s",
-                initial_point,
-            )
-        
         current_ansatz = self.adaptive_ansatz.get_current_ansatz()
         result = self.trainer.train_one_time(
             ansatz=current_ansatz,
@@ -927,7 +833,7 @@ class MutableAnsatzExperiment:
         loss_function: Callable[[np.ndarray], float],
         plan: OuterStepPlan,
         train_iterations: int = 100,
-        initial_point: list | np.ndarray | None = None,
+        initial_point_generator: Callable[..., np.ndarray] | None = None,
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
         trainer_iteration_reset: int | None = 0,
@@ -953,9 +859,12 @@ class MutableAnsatzExperiment:
             Concrete structural proposal to execute.
         train_iterations : int, optional
             Number of inner-loop optimization steps after executing the plan.
-        initial_point : list | np.ndarray | None, optional
-            Explicit starting point for retraining. If None, the method follows the
-            warm-start settings.
+        initial_point_generator : Callable[..., np.ndarray] | None, optional
+            Optional factory for generating the initial point for each training phase.
+            If provided, this is called at each outer step with the current experiment
+            state and the reconciled `initial_point` to produce the actual initial
+            point used for training. The signature of the generator should be
+            `generator(iteration: int) -> np.ndarray`.
         loss_next : Callable[[np.ndarray], float] | None, optional
             Optional objective for next-step evaluation during training.
         train_after_plan : bool, optional
@@ -1036,20 +945,29 @@ class MutableAnsatzExperiment:
                 train_iterations,
             )
             
-            reconciled_initial_point = self._reconcile_initial_point_after_structure_change(
-                initial_point=initial_point,
-                params_before=params_before,
-                default_value_for_new_params=default_value_for_new_params,
-            )
+            if initial_point_generator is None and reuse_parameter_memory and self.parameter_memory:
+                logger.info(
+                    "Reusing parameter memory to build initial point for training after plan '%s'.",
+                    plan.display_name,
+                )
+                initial_point = self.build_warm_start_initial_point(
+                    default_value_for_new_params=default_value_for_new_params
+                )
+                logger.info(
+                    "Built initial point from parameter memory for training: %s",
+                    initial_point,
+                )
+            elif initial_point_generator is None:
+                initial_point = [np.random.choice([-1.0, 1.0]) for _ in range(self.ansatz.num_parameters)]
+            else:
+                initial_point = initial_point_generator(self._outer_iteration)
             
             train_result = self.train_one_time(
                 loss_function=loss_function,
-                initial_point=reconciled_initial_point,
+                initial_point=initial_point,
                 loss_next=loss_next,
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
-                reuse_parameter_memory=reuse_parameter_memory,
-                default_value_for_new_params=default_value_for_new_params,
                 **train_kwargs,
             )
             cost_after = float(train_result.fun)
@@ -1226,7 +1144,9 @@ class MutableAnsatzExperiment:
         plan_schedule: list[Callable[["MutableAnsatzExperiment"], OuterStepPlan]],
         outer_iterations: int | None = None,
         train_iterations: int = 100,
+        train_before_first_plan: bool = True,
         initial_point: list | np.ndarray | None = None,
+        initial_point_generator: Callable[..., np.ndarray] | None = None,
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
         trainer_iteration_reset: int | None = 0,
@@ -1258,8 +1178,18 @@ class MutableAnsatzExperiment:
             used.
         train_iterations : int, optional
             Number of inner-loop optimization steps after each executed plan.
+        train_before_first_plan : bool, optional
+            Whether to perform an initial training phase before executing the first plan.
         initial_point : list | np.ndarray | None, optional
-            Explicit starting point for retraining.
+            Explicit starting point for first training run. If train_before_actions
+            is False, the initial point might not have the correct dimensions and will
+            get reconciled with the current ansatz structure after executing the first plan.
+        initial_point_generator : Callable[..., np.ndarray] | None, optional
+            Optional factory for generating the initial point for each training phase.
+            If provided, this is called at each outer step with the current experiment
+            state and the reconciled `initial_point` to produce the actual initial
+            point used for training. The signature of the generator should be
+            `generator(iteration: int) -> np.ndarray`.
         loss_next : Callable[[np.ndarray], float] | None, optional
             Optional objective for next-step evaluation during training.
         train_after_plan : bool, optional
@@ -1318,6 +1248,83 @@ class MutableAnsatzExperiment:
             outer_iterations,
             len(plan_schedule),
         )
+        
+        if train_before_first_plan and self._outer_iteration == 0:     
+            logger.info(
+                "Training before first plan execution for %d inner-loop iterations.",
+                train_iterations,
+            )
+            
+            if initial_point is None:
+                initial_point = [np.random.choice([-1.0, 1.0]) for _ in range(self.ansatz.num_parameters)]
+                logger.info(
+                    "No initial point provided for training before first plan; using random initialization: %s",
+                    initial_point,
+                )
+            
+            if len(initial_point) != self.ansatz.num_parameters:
+                raise ValueError(
+                    f"Provided `initial_point` has {len(initial_point)} parameters, but the current "
+                    f"ansatz has {self.ansatz.num_parameters} parameters. Please provide an `initial_point` "
+                    f"with the correct dimensions or set `train_before_first_plan=False` to skip "
+                    "this initial training phase."
+                )
+            
+            train_result = self.train_one_time(
+                loss_function=loss_function,
+                initial_point=initial_point,
+                loss_next=loss_next,
+                iterations=train_iterations,
+                update_parameter_memory=update_parameter_memory,
+                **train_kwargs,
+            )
+                            
+            self._reset_inner_loop_callback(
+                callback_builder,
+                **({} if callback_kwargs is None else callback_kwargs)
+                ) # Will only reset if callback_builder is not None
+            self.reset_optimizer_iteration(trainer_iteration_reset)
+            
+            if record_parameter_memory:
+                self._record_parameter_memory(
+                    action="Initial training before first plan",
+                    accepted=True,
+                    cost=float(train_result.fun),
+                )
+                
+                self._record_accepted_ansatz(
+                    action="Initial training before first plan",
+                    cost=float(train_result.fun),
+                    note="Recorded accepted ansatz after initial training phase before executing any plans."
+                )
+                
+                self.parameter_memory_history.append(
+                    ParameterMemoryRecord(
+                        outer_iteration=self._outer_iteration,
+                        action="Initial training before first plan",
+                        accepted=True,
+                        values=self.parameter_memory,
+                        cost=float(train_result.fun),
+                    )
+                )
+            
+            result = OuterStepResult(
+                iteration=self._outer_iteration,
+                action="Initial training before first plan",
+                accepted=True,
+                cost_before=None,
+                cost_after=float(train_result.fun),
+                delta_cost=None,
+                num_parameters_before=self.ansatz.num_parameters,
+                num_parameters_after=self.ansatz.num_parameters,
+                num_two_qubit_before=len(self._2qbg_positions),
+                num_two_qubit_after=len(self._2qbg_positions),
+                note="Initial training phase before executing any plans.",
+            )
+            
+            self.outer_step_history.append(result)
+            # Advance an outer step in order to keep memory consistent.
+            self._outer_iteration += 1 
 
         for step in range(outer_iterations):
             builder_index = min(step, len(plan_schedule) - 1)
@@ -1352,7 +1359,7 @@ class MutableAnsatzExperiment:
                     loss_function=loss_function,
                     plan=plan,
                     train_iterations=train_iterations,
-                    initial_point=initial_point,
+                    initial_point_generator=initial_point_generator,
                     loss_next=loss_next,
                     train_after_plan=train_after_plan,
                     trainer_iteration_reset=trainer_iteration_reset,
