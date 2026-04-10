@@ -425,10 +425,7 @@ class AdaptiveAnsatz:
         """
         Synchronize `self.params` with the parameters currently present in `current_ansatz`.
         """
-        self.params = sorted(
-            list(self.current_ansatz.parameters),
-            key=lambda p: int(p.name.split("_")[1])
-    )
+        self.params = list(self.current_ansatz.parameters)
 
     def copy(self) -> "AdaptiveAnsatz":
         """
