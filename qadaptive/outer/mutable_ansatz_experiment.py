@@ -1302,16 +1302,6 @@ class MutableAnsatzExperiment:
                     cost=float(train_result.fun),
                     note="Recorded accepted ansatz after initial training phase before executing any plans."
                 )
-                
-                self.parameter_memory_history.append(
-                    ParameterMemoryRecord(
-                        outer_iteration=self._outer_iteration,
-                        action="Initial training before first plan",
-                        accepted=True,
-                        values=self.parameter_memory,
-                        cost=float(train_result.fun),
-                    )
-                )
             
             result = OuterStepResult(
                 iteration=self._outer_iteration,
