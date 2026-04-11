@@ -284,8 +284,8 @@ class SPSA(StepwiseOptimizer):
         def perturbation(n_start: int = 0) -> Iterator[float]:
             return powerseries(c, gamma, n_start=n_start)
 
-        self.learning_rate = learning_rate
-        self.perturbation = perturbation
+        self.set_learning_rate(learning_rate)
+        self.set_perturbation(perturbation)
         self._hyperparameters = {
             "a": a,
             "alpha": alpha,
