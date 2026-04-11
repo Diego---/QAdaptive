@@ -20,7 +20,7 @@ from qadaptive.core.mutation import (
     update_locked_gates_on_removal,
     get_two_qubit_gate_offsets,
     update_locked_gates_on_multiple_inserts,
-    TwoQMap, LockId
+    TwoQMap
 )
 from qadaptive.core.simplification import simplify_ansatz
 from qadaptive.core.pruning import evaluate_two_qubit_gate_pruning
@@ -113,6 +113,11 @@ class MutableAnsatzExperiment:
             An inner loop trainer object that handles the inner optimization.
         track_results : bool, optional
             Indicates whether inner-loop results history is being tracked. Defaults to True.
+            
+        Raises
+        ------
+        ValueError
+            If `trainer` is None.
         """
         self.adaptive_ansatz = adaptive_ansatz.copy()
         self.ansatz: QuantumCircuit = self.adaptive_ansatz.get_current_ansatz()
@@ -157,16 +162,6 @@ class MutableAnsatzExperiment:
         ------
         ValueError
             If both `optimizer` and `optimizer_options` are None.
-
-        Examples
-        --------
-        >>> experiment = MutableAnsatzExperiment()
-        >>> spsa_optimizer = SPSA(maxiter=500)
-        >>> experiment.set_optimizer(optimizer=spsa_optimizer)
-
-        >>> experiment = MutableAnsatzExperiment()
-        >>> spsa_options = {'maxiter': 100, 'learning_rate': 0.01}
-        >>> experiment.set_optimizer(optimizer_options=spsa_options)
         """
         
         self.trainer.set_optimizer(optimizer=optimizer, optimizer_options=optimizer_options)
@@ -325,15 +320,6 @@ class MutableAnsatzExperiment:
         run to cache the final trained parameter values. The stored mapping can then
         be reused to initialize the next training run after a structural ansatz
         update.
-
-        Examples
-        --------
-        Store the final result of a completed training run:
-
-        >>> result = experiment.train_one_time(loss_function, iterations=100)
-        >>> experiment._store_parameter_values(result.x)
-        or
-        >>> experiment._store_parameter(experiment.last_params)
         """
         if params is None:
             params = self._current_parameters()
@@ -911,6 +897,10 @@ class MutableAnsatzExperiment:
         ValueError
             If the current ansatz has not been trained yet and the selected
             acceptance mode requires a valid baseline.
+            If `train_after_plan` is False while `plan.acceptance_mode` is "outer", since
+            a cost evaluation after the plan execution is required for generic outer acceptance.
+            If `initial_point_generator` is not None but does not have the correct signature.
+        
         """
         snapshot = self._snapshot_state()
 
