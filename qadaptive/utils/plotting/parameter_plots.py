@@ -7,9 +7,6 @@ import numpy as np
 
 from qadaptive.utils.plotting.traces import TrainingRunTrace
 
-
-
-
 def _parameter_sort_key(name: str):
     match = re.match(r"^θ_(\d+)$", name)
     if match is None:
