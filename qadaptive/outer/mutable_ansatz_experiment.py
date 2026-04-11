@@ -20,7 +20,7 @@ from qadaptive.core.mutation import (
     update_locked_gates_on_removal,
     get_two_qubit_gate_offsets,
     update_locked_gates_on_multiple_inserts,
-    TwoQMap, LockId
+    TwoQMap
 )
 from qadaptive.core.simplification import simplify_ansatz
 from qadaptive.core.pruning import evaluate_two_qubit_gate_pruning
@@ -35,6 +35,7 @@ from qadaptive.outer.action_definitions import (
 from qadaptive.outer.outer_loop import (
     OuterStepResult,
     ParameterMemoryRecord,
+    ParameterMemoryCache,
     AcceptedAnsatzRecord,
     ExperimentSnapshot,
     ActionSpec,
@@ -85,9 +86,9 @@ class MutableAnsatzExperiment:
         Most recent cost value stored by the trainer. Exposed as a property.
     last_params : np.ndarray | None
         Most recent parameter vector stored by the trainer. Exposed as a property.
-    parameter_memory : dict[str, float]
-        Persistent mapping from parameter names to their most recently accepted
-        numerical values.
+    parameter_memory : ParameterMemoryCache
+        Parameter cache of most recently completed training run, intended for 
+        warm-starting subsequent runs after structural changes.
     parameter_memory_history :list[ParameterMemoryRecord]
         History of `parameter_memory` snapshots taken after each training run.
     outer_step_history : list[OuterStepResult]
@@ -112,6 +113,11 @@ class MutableAnsatzExperiment:
             An inner loop trainer object that handles the inner optimization.
         track_results : bool, optional
             Indicates whether inner-loop results history is being tracked. Defaults to True.
+            
+        Raises
+        ------
+        ValueError
+            If `trainer` is None.
         """
         self.adaptive_ansatz = adaptive_ansatz.copy()
         self.ansatz: QuantumCircuit = self.adaptive_ansatz.get_current_ansatz()
@@ -126,7 +132,7 @@ class MutableAnsatzExperiment:
         # Since the ansatz will be constantly changing, this is tracked by looking at the
         # n'th two qubit gate and the qubits it acts on. No gate is locked by default.
         self.locked_gates = set()
-        self.parameter_memory: dict[str, float] = {}
+        self.parameter_memory: ParameterMemoryCache = ParameterMemoryCache(parameters=[], parameter_names=[], dictionary={})
         self.parameter_memory_history: list[ParameterMemoryRecord] = []
         self.outer_step_history: list[OuterStepResult] = []
         self.accepted_ansatz_history: list[AcceptedAnsatzRecord] = []
@@ -156,16 +162,6 @@ class MutableAnsatzExperiment:
         ------
         ValueError
             If both `optimizer` and `optimizer_options` are None.
-
-        Examples
-        --------
-        >>> experiment = MutableAnsatzExperiment()
-        >>> spsa_optimizer = SPSA(maxiter=500)
-        >>> experiment.set_optimizer(optimizer=spsa_optimizer)
-
-        >>> experiment = MutableAnsatzExperiment()
-        >>> spsa_options = {'maxiter': 100, 'learning_rate': 0.01}
-        >>> experiment.set_optimizer(optimizer_options=spsa_options)
         """
         
         self.trainer.set_optimizer(optimizer=optimizer, optimizer_options=optimizer_options)
@@ -198,7 +194,7 @@ class MutableAnsatzExperiment:
         iteration : int, optional
             The value to which the optimizer's iteration counter should be reset. Default is 0.
         """
-        self.trainer.optimizer.last_iteration = iteration
+        self.trainer.optimizer.reset_runtime_state(iteration)
         
     def _reset_inner_loop_callback(
         self,
@@ -241,7 +237,7 @@ class MutableAnsatzExperiment:
         """
         self.adaptive_ansatz.update_params()
         
-    def _ordered_current_parameters(self) -> list[Parameter]:
+    def _current_parameters(self) -> list[Parameter]:
         """
         Return the current ansatz parameters in optimizer order.
 
@@ -259,6 +255,44 @@ class MutableAnsatzExperiment:
         """
         return list(self.adaptive_ansatz.params)
     
+    def _past_parameter_dictionary(self, iteration: int | None = None) -> dict[str, float] | None:
+        """
+        Return the parameter dictionary from a ParameterMemoryCache corresponding to a 
+        past training iteration.
+
+        Parameters
+        ----------
+        iteration : int | None, optional
+            The index of the past training iteration for which to retrieve the parameter list.
+            If None, the current index - 1 is used, corresponding to the most recent completed training run. 
+            Default is None.
+
+        Returns
+        -------
+        list[Parameter] | None
+            The list of parameters that were active during the specified training iteration, 
+            or None if the iteration index is out of bounds.
+
+        Notes
+        -----
+        This method allows retrieval of the parameter configuration associated with a specific 
+        past training run, as recorded in `parameter_memory_history`. 
+        """
+        
+        if iteration is None:
+            iteration = self._outer_iteration - 1
+        
+        if 0 <= iteration < len(self.parameter_memory_history):
+            cache = self.parameter_memory_history[iteration].values
+            return cache.dictionary
+        else:
+            logger.warning(
+                "Requested past parameter dict for iteration %d, but only %d records are available.",
+                iteration,
+                len(self.parameter_memory_history),
+            )
+            return None
+    
     def _store_parameter_values(
         self,
         values: list[float] | np.ndarray,
@@ -273,7 +307,7 @@ class MutableAnsatzExperiment:
             Numerical parameter values to store.
         params : list[Parameter] | None, optional
             Parameters associated with `values`. If `None`, the current ansatz
-            parameters returned by `_ordered_current_parameters` are used.
+            parameters returned by `_current_parameters` are used.
 
         Raises
         ------
@@ -286,18 +320,9 @@ class MutableAnsatzExperiment:
         run to cache the final trained parameter values. The stored mapping can then
         be reused to initialize the next training run after a structural ansatz
         update.
-
-        Examples
-        --------
-        Store the final result of a completed training run:
-
-        >>> result = experiment.train_one_time(loss_function, iterations=100)
-        >>> experiment._store_parameter_values(result.x)
-        or
-        >>> experiment._store_parameter(experiment.last_params)
         """
         if params is None:
-            params = self._ordered_current_parameters()
+            params = self._current_parameters()
 
         values = np.asarray(values, dtype=float)
 
@@ -305,9 +330,16 @@ class MutableAnsatzExperiment:
             raise ValueError(
                 f"Got {len(values)} values for {len(params)} parameters."
             )
-
-        for param, value in zip(params, values):
-            self.parameter_memory[param.name] = float(value)
+            
+        param_dict = {param.name: float(value) for param, value in zip(params, values)}
+        
+        cache = ParameterMemoryCache(
+            parameters=params,
+            parameter_names=[param.name for param in params],
+            dictionary=param_dict
+        )
+        
+        self.parameter_memory = cache
             
     def _record_parameter_memory(
         self,
@@ -347,7 +379,7 @@ class MutableAnsatzExperiment:
                 outer_iteration=self._outer_iteration,
                 action=action,
                 accepted=accepted,
-                values=dict(self.parameter_memory),
+                values=self.parameter_memory,
                 cost=cost,
             )
         )
@@ -400,19 +432,26 @@ class MutableAnsatzExperiment:
 
         This method is intended for warm-starting successive inner-loop training
         runs in the outer adaptive optimization loop.
-
-        Examples
-        --------
-        Build a warm-start vector after inserting a new block:
-
-        >>> x0 = experiment.build_warm_start_initial_point()
-        >>> result = experiment.train_one_time(loss_function, initial_point=x0)
         """
-        params = self._ordered_current_parameters()
+        current_param_names = [param.name for param in self._current_parameters()]
+        # Past param names are in the parameter memory cache
+        
+        logger.debug(
+            "Old parameter names: %s \nNew parameter names: %s",
+            self.parameter_memory.parameter_names,
+            current_param_names,
+        )
+        
+        logger.info(
+            "Building warm-start initial point for %d parameters, of which %d are new.",
+            len(current_param_names),
+            sum(1 for name in current_param_names if name not in self.parameter_memory.parameter_names),
+        )
+        
         return np.asarray(
             [
-                self.parameter_memory.get(param.name, default_value_for_new_params)
-                for param in params
+                self.parameter_memory.dictionary.get(param_name, default_value_for_new_params)
+                for param_name in current_param_names
             ],
             dtype=float,
         )
@@ -443,23 +482,11 @@ class MutableAnsatzExperiment:
         It is mainly useful for debugging, inspection, serialization, or for
         understanding how the current ansatz would be initialized by
         `build_warm_start_initial_point`.
-
-        Examples
-        --------
-        Inspect the currently active parameter values:
-
-        >>> experiment.get_current_parameter_dict()
-
-        After inserting a new block, newly introduced parameters appear with the
-        specified default value unless they have already been assigned a stored
-        value:
-
-        >>> experiment.get_current_parameter_dict(default_value_for_new_params=0.0)
         """
 
         return {
-            p.name: self.parameter_memory.get(p.name, default_value_for_new_params)
-            for p in self._ordered_current_parameters()
+            p.name: self.parameter_memory.dictionary.get(p.name, default_value_for_new_params)
+            for p in self._current_parameters()
         }
         
     def prune_parameter_memory_to_current_ansatz(self) -> None:
@@ -479,12 +506,18 @@ class MutableAnsatzExperiment:
         `build_warm_start_initial_point` already ignores parameter names that are
         not present in the current ansatz.
         """
-        current_names = {p.name for p in self._ordered_current_parameters()}
-        self.parameter_memory = {
+        current_names = {p.name for p in self._current_parameters()}
+        param_dict = {
             name: value
-            for name, value in self.parameter_memory.items()
+            for name, value in self.parameter_memory.dictionary.items()
             if name in current_names
         }
+        
+        self.parameter_memory = ParameterMemoryCache(
+            parameters=[p for p in self._current_parameters() if p.name in current_names],
+            parameter_names=[p.name for p in self._current_parameters() if p.name in current_names],
+            dictionary=param_dict
+        )
     
     def _update_locked_gates_on_insert(self, circ_ind: int) -> None:
         """
@@ -693,83 +726,6 @@ class MutableAnsatzExperiment:
         if reset_locked_gates:
             self.locked_gates = set()
             
-    def _reconcile_initial_point_after_structure_change(
-        self,
-        initial_point: list[float] | np.ndarray | None,
-        params_before: list[Parameter],
-        default_value_for_new_params: float = 0.0,
-    ) -> np.ndarray | None:
-        """
-        Reconcile an explicitly provided initial point with the current ansatz
-        after a structural change.
-
-        Parameters
-        ----------
-        initial_point : list[float] | np.ndarray | None
-            User-provided initial point defined either on the pre-change ansatz or
-            already on the current ansatz.
-        params_before : list[Parameter]
-            Ordered parameter list of the ansatz before the structural actions.
-        default_value_for_new_params : float, optional
-            Value assigned to newly introduced parameters that were not present in
-            `params_before`.
-
-        Returns
-        -------
-        np.ndarray | None
-            Initial point compatible with the current ansatz, or None if no initial
-            point was provided.
-
-        Raises
-        ------
-        ValueError
-            If the provided vector matches neither the pre-change nor the current
-            parameter count.
-        """
-        if initial_point is None:
-            return None
-
-        x = np.asarray(initial_point, dtype=float)
-        params_after = self._ordered_current_parameters()
-
-        if len(x) == len(params_after):
-            return x
-
-        if len(x) != len(params_before):
-            raise ValueError(
-                "Provided `initial_point` is incompatible with both the pre-change "
-                f"ansatz ({len(params_before)} parameters) and the current ansatz "
-                f"({len(params_after)} parameters)."
-            )
-
-        value_map = {
-            param.name: float(value)
-            for param, value in zip(params_before, x)
-        }
-        
-        before_names = {param.name for param in params_before}
-        after_names = {param.name for param in params_after}
-        
-        added_names = sorted(after_names - before_names)
-        removed_names = sorted(before_names - after_names)
-        retained_names = sorted(before_names & after_names)
-        
-        logger.debug(
-            "Retained parameters (%d): %s", 
-            len(retained_names),
-            retained_names
-            )
-        logger.info("Added parameters after structural change: %s", added_names)
-        logger.info("Removed parameters after structural change: %s", removed_names)
-
-        return np.asarray(
-            [
-                value_map.get(param.name, default_value_for_new_params)
-                for param in params_after
-            ],
-            dtype=float,
-        )
-        
     def lock_gates(self, gates_to_lock: list[int]) -> None:
         """
         Lock two-qubit gates specified by their circuit-data indices.
@@ -794,8 +750,7 @@ class MutableAnsatzExperiment:
         loss_next: Callable[[np.ndarray], float] | None = None,
         iterations: int = 100,
         update_parameter_memory: bool = True,
-        reuse_parameter_memory: bool = True,
-        default_value_for_new_params: float = 0.0,
+        trainer_iteration_reset: int | None = None,
         **kwargs
         ) -> OptimizerResult:
         """
@@ -820,6 +775,8 @@ class MutableAnsatzExperiment:
         default_value_for_new_params : float, optional
             Default value assigned to current parameters that are not yet present in
             `parameter_memory` when warm-starting a run.
+        trainer_iteration_reset : int | None, optional
+            If not None, the optimizer's iteration counter is reset to this value after training.
         **kwargs
             Additional configuration. Currently supports:
             - `use_epochs`
@@ -832,15 +789,6 @@ class MutableAnsatzExperiment:
             The result of the optimization.
         """
         
-        if initial_point is None and reuse_parameter_memory and self.parameter_memory:
-            initial_point = self.build_warm_start_initial_point(
-                default_value_for_new_params=default_value_for_new_params
-            )
-            logger.info(
-                "Built initial point from parameter memory for training: %s",
-                initial_point,
-            )
-        
         current_ansatz = self.adaptive_ansatz.get_current_ansatz()
         result = self.trainer.train_one_time(
             ansatz=current_ansatz,
@@ -848,6 +796,7 @@ class MutableAnsatzExperiment:
             initial_point=initial_point,
             loss_next=loss_next,
             iterations=iterations,
+            iteration_start=trainer_iteration_reset,
             **kwargs,
         )
         
@@ -858,8 +807,16 @@ class MutableAnsatzExperiment:
             self._store_parameter_values(result.x)
             logger.debug(
                 "Updated parameter memory with %d active parameters.",
-                len(self.parameter_memory),
+                len(self.parameter_memory.parameter_names),
                 )
+            
+        logger.debug(
+            "Completed training with final cost %.10f and parameters %s"
+            " in %d inner iterations.",
+            result.fun,
+            result.x,
+            self.trainer._last_num_iterations,
+            )
             
         return result
     
@@ -868,10 +825,12 @@ class MutableAnsatzExperiment:
         loss_function: Callable[[np.ndarray], float],
         plan: OuterStepPlan,
         train_iterations: int = 100,
-        initial_point: list | np.ndarray | None = None,
+        initial_point_generator: Callable[..., np.ndarray] | None = None,
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
+        trainer_iteration_reset: int | None = 0,
         callback_builder: Callable[..., CALLBACK] | None = None,
+        callback_kwargs: dict | None = None,
         update_parameter_memory: bool = True,
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
@@ -892,17 +851,25 @@ class MutableAnsatzExperiment:
             Concrete structural proposal to execute.
         train_iterations : int, optional
             Number of inner-loop optimization steps after executing the plan.
-        initial_point : list | np.ndarray | None, optional
-            Explicit starting point for retraining. If None, the method follows the
-            warm-start settings.
+        initial_point_generator : Callable[..., np.ndarray] | None, optional
+            Optional factory for generating the initial point for each training phase.
+            If provided, this is called at each outer step with the current experiment
+            state and the reconciled `initial_point` to produce the actual initial
+            point used for training. The signature of the generator should be
+            `generator(iteration: int) -> np.ndarray`.
         loss_next : Callable[[np.ndarray], float] | None, optional
             Optional objective for next-step evaluation during training.
         train_after_plan : bool, optional
             Whether to retrain after executing the plan.
+        trainer_iteration_reset : int | None,  optional
+            Value to which the optimizer's iteration counter is reset after retraining.
+            If None, the counter is not reset. Default is 0.
         callback_builder : Callable[..., CALLBACK] | None, optional
             Factory used to rebuild the optimizer callback after each retraining phase.
             This is useful when live-plot callbacks should be reset between outer-loop
             steps so that each inner-loop run starts with a fresh plot/history.
+        callback_kwargs : dict | None, optional
+            Keyword arguments forwarded to `callback_builder` when rebuilding the callback.
         update_parameter_memory : bool, optional
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
@@ -930,11 +897,14 @@ class MutableAnsatzExperiment:
         ValueError
             If the current ansatz has not been trained yet and the selected
             acceptance mode requires a valid baseline.
+            If `train_after_plan` is False while `plan.acceptance_mode` is "outer", since
+            a cost evaluation after the plan execution is required for generic outer acceptance.
+            If `initial_point_generator` is not None but does not have the correct signature.
+        
         """
         snapshot = self._snapshot_state()
 
         ansatz_before = snapshot.ansatz.copy()
-        params_before = self._ordered_current_parameters()
         num_parameters_before = ansatz_before.num_parameters
         num_two_qubit_before = len(snapshot.two_q_map)
 
@@ -959,7 +929,7 @@ class MutableAnsatzExperiment:
             num_two_qubit_before,
         )
 
-        # Execute the structural proposal.
+        # Execute the structural change proposal.
         self.execute_action_plan(plan, cost=loss_function)
 
         train_result: OptimizerResult | None = None
@@ -970,26 +940,38 @@ class MutableAnsatzExperiment:
                 train_iterations,
             )
             
-            reconciled_initial_point = self._reconcile_initial_point_after_structure_change(
-                initial_point=initial_point,
-                params_before=params_before,
-                default_value_for_new_params=default_value_for_new_params,
-            )
+            if initial_point_generator is None and reuse_parameter_memory and self.parameter_memory:
+                logger.info(
+                    "Reusing parameter memory to build initial point for training after plan '%s'.",
+                    plan.display_name,
+                )
+                initial_point = self.build_warm_start_initial_point(
+                    default_value_for_new_params=default_value_for_new_params
+                )
+                logger.info(
+                    "Built initial point from parameter memory for training: %s",
+                    initial_point,
+                )
+            elif initial_point_generator is None:
+                initial_point = [np.random.choice([-1.0, 1.0]) for _ in range(self.ansatz.num_parameters)]
+            else:
+                initial_point = initial_point_generator(self._outer_iteration)
             
             train_result = self.train_one_time(
                 loss_function=loss_function,
-                initial_point=reconciled_initial_point,
+                initial_point=initial_point,
                 loss_next=loss_next,
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
-                reuse_parameter_memory=reuse_parameter_memory,
-                default_value_for_new_params=default_value_for_new_params,
+                trainer_iteration_reset=trainer_iteration_reset,
                 **train_kwargs,
             )
             cost_after = float(train_result.fun)
             
-            self._reset_inner_loop_callback(callback_builder, **train_kwargs) # Will only reset if callback_builder is not None
-            self.reset_optimizer_iteration(0)
+            self._reset_inner_loop_callback(
+                callback_builder,
+                **({} if callback_kwargs is None else callback_kwargs)
+                ) # Will only reset if callback_builder is not None
         else:
             if plan.acceptance_mode == "outer":
                 raise ValueError(
@@ -1002,7 +984,7 @@ class MutableAnsatzExperiment:
         num_two_qubit_after = len(self._2qbg_positions)
 
         # Keep a copy of the trial parameter memory before a possible rollback.
-        trial_parameter_memory = dict(self.parameter_memory)
+        trial_parameter_memory = self.parameter_memory
 
         if plan.acceptance_mode == "outer":
             if self.outer_step_history:
@@ -1157,10 +1139,14 @@ class MutableAnsatzExperiment:
         plan_schedule: list[Callable[["MutableAnsatzExperiment"], OuterStepPlan]],
         outer_iterations: int | None = None,
         train_iterations: int = 100,
+        train_before_first_plan: bool = True,
         initial_point: list | np.ndarray | None = None,
+        initial_point_generator: Callable[..., np.ndarray] | None = None,
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
+        trainer_iteration_reset: int | None = 0,
         callback_builder: Callable[..., CALLBACK] | None = None,
+        callback_kwargs: dict | None = None,
         update_parameter_memory: bool = True,
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
@@ -1187,16 +1173,31 @@ class MutableAnsatzExperiment:
             used.
         train_iterations : int, optional
             Number of inner-loop optimization steps after each executed plan.
+        train_before_first_plan : bool, optional
+            Whether to perform an initial training phase before executing the first plan.
         initial_point : list | np.ndarray | None, optional
-            Explicit starting point for retraining.
+            Explicit starting point for first training run. If train_before_actions
+            is False, the initial point might not have the correct dimensions and will
+            get reconciled with the current ansatz structure after executing the first plan.
+        initial_point_generator : Callable[..., np.ndarray] | None, optional
+            Optional factory for generating the initial point for each training phase.
+            If provided, this is called at each outer step with the current experiment
+            state and the reconciled `initial_point` to produce the actual initial
+            point used for training. The signature of the generator should be
+            `generator(iteration: int) -> np.ndarray`.
         loss_next : Callable[[np.ndarray], float] | None, optional
             Optional objective for next-step evaluation during training.
         train_after_plan : bool, optional
             Whether to retrain after executing each plan.
+        trainer_iteration_reset : int | None, optional
+            Value to which the optimizer's iteration counter is reset after retraining. 
+            If None, the counter is not reset. Default is 0.
         callback_builder : Callable[..., CALLBACK] | None, optional
             Factory used to rebuild the optimizer callback after each retraining phase.
             This is useful when live-plot callbacks should be reset between outer-loop
             steps so that each inner-loop run starts with a fresh plot/history.
+        callback_kwargs : dict | None, optional
+            Keyword arguments forwarded to `callback_builder` when rebuilding the callback.
         update_parameter_memory : bool, optional
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
@@ -1242,6 +1243,73 @@ class MutableAnsatzExperiment:
             outer_iterations,
             len(plan_schedule),
         )
+        
+        if train_before_first_plan and self._outer_iteration == 0:     
+            logger.info(
+                "Training before first plan execution for %d inner-loop iterations.",
+                train_iterations,
+            )
+            
+            if initial_point is None:
+                initial_point = [np.random.choice([-1.0, 1.0]) for _ in range(self.ansatz.num_parameters)]
+                logger.info(
+                    "No initial point provided for training before first plan; using random initialization: %s",
+                    initial_point,
+                )
+            
+            if len(initial_point) != self.ansatz.num_parameters:
+                raise ValueError(
+                    f"Provided `initial_point` has {len(initial_point)} parameters, but the current "
+                    f"ansatz has {self.ansatz.num_parameters} parameters. Please provide an `initial_point` "
+                    f"with the correct dimensions or set `train_before_first_plan=False` to skip "
+                    "this initial training phase."
+                )
+            
+            train_result = self.train_one_time(
+                loss_function=loss_function,
+                initial_point=initial_point,
+                loss_next=loss_next,
+                iterations=train_iterations,
+                update_parameter_memory=update_parameter_memory,
+                trainer_iteration_reset=trainer_iteration_reset,
+                **train_kwargs,
+            )
+                            
+            self._reset_inner_loop_callback(
+                callback_builder,
+                **({} if callback_kwargs is None else callback_kwargs)
+                ) # Will only reset if callback_builder is not None
+            
+            if record_parameter_memory:
+                self._record_parameter_memory(
+                    action="Initial training before first plan",
+                    accepted=True,
+                    cost=float(train_result.fun),
+                )
+                
+                self._record_accepted_ansatz(
+                    action="Initial training before first plan",
+                    cost=float(train_result.fun),
+                    note="Recorded accepted ansatz after initial training phase before executing any plans."
+                )
+            
+            result = OuterStepResult(
+                iteration=self._outer_iteration,
+                action="Initial training before first plan",
+                accepted=True,
+                cost_before=None,
+                cost_after=float(train_result.fun),
+                delta_cost=None,
+                num_parameters_before=self.ansatz.num_parameters,
+                num_parameters_after=self.ansatz.num_parameters,
+                num_two_qubit_before=len(self._2qbg_positions),
+                num_two_qubit_after=len(self._2qbg_positions),
+                note="Initial training phase before executing any plans.",
+            )
+            
+            self.outer_step_history.append(result)
+            # Advance an outer step in order to keep memory consistent.
+            self._outer_iteration += 1 
 
         for step in range(outer_iterations):
             builder_index = min(step, len(plan_schedule) - 1)
@@ -1276,10 +1344,12 @@ class MutableAnsatzExperiment:
                     loss_function=loss_function,
                     plan=plan,
                     train_iterations=train_iterations,
-                    initial_point=initial_point,
+                    initial_point_generator=initial_point_generator,
                     loss_next=loss_next,
                     train_after_plan=train_after_plan,
+                    trainer_iteration_reset=trainer_iteration_reset,
                     callback_builder=callback_builder,
+                    callback_kwargs=callback_kwargs,
                     update_parameter_memory=update_parameter_memory,
                     reuse_parameter_memory=reuse_parameter_memory,
                     default_value_for_new_params=default_value_for_new_params,
@@ -1534,13 +1604,13 @@ class MutableAnsatzExperiment:
             ansatz=self.adaptive_ansatz.get_current_ansatz().copy(),
             locked_gates=set(self.locked_gates),
             two_q_map=dict(self._2qbg_positions),
-            parameter_memory=dict(self.parameter_memory),
+            parameter_memory=self.parameter_memory,
             parameter_memory_history=[
                 ParameterMemoryRecord(
                     outer_iteration=record.outer_iteration,
                     action=record.action,
                     accepted=record.accepted,
-                    values=dict(record.values),
+                    values=record.values,
                     cost=record.cost,
                 )
                 for record in self.parameter_memory_history
@@ -1575,13 +1645,13 @@ class MutableAnsatzExperiment:
         self.locked_gates = set(snapshot.locked_gates)
         self._2qbg_positions = dict(snapshot.two_q_map)
 
-        self.parameter_memory = dict(snapshot.parameter_memory)
+        self.parameter_memory = snapshot.parameter_memory
         self.parameter_memory_history = [
             ParameterMemoryRecord(
                 outer_iteration=record.outer_iteration,
                 action=record.action,
                 accepted=record.accepted,
-                values=dict(record.values),
+                values=record.values,
                 cost=record.cost,
             )
             for record in snapshot.parameter_memory_history
@@ -1676,10 +1746,11 @@ class MutableAnsatzExperiment:
         self.adaptive_ansatz.add_gate_at_index(gate, circ_ind, qubits)
         logger.info(f"Inserted {gate} gate on qubits {qubits} at position {circ_ind}.")
             
-        self._sync_after_ansatz_change()
         if len(qubits) == 2:
             self._update_locked_gates_on_insert(circ_ind)
             logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
+            
+        self._sync_after_ansatz_change()
 
     def remove_at(
         self, circ_ind: int
@@ -1708,10 +1779,11 @@ class MutableAnsatzExperiment:
             
         self.adaptive_ansatz.remove_gate_by_index(circ_ind)
         
-        self._sync_after_ansatz_change()
         if is_2qbg:
             self._update_locked_gates_on_removal(circ_ind)
             logger.info("Updated 2Q positions after removal: %s", self._2qbg_positions)
+            
+        self._sync_after_ansatz_change()
         
     def insert_block_at(
         self,
@@ -1803,6 +1875,10 @@ class MutableAnsatzExperiment:
         QuantumCircuit
             Simplified circuit.
         """
+        logger.info(
+            "Starting ansatz simplification with transpiler passes for %d repetitions.",
+             repetitions
+        )
         result = simplify_ansatz(
             circuit=self.adaptive_ansatz.current_ansatz,
             pass_manager=pass_manager,

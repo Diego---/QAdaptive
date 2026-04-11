@@ -1,4 +1,4 @@
-import random, logging
+import random, logging, re
 
 from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter, CircuitInstruction, Qubit
@@ -38,7 +38,7 @@ class AdaptiveAnsatz:
             Whether to keep track of previous ansatz versions (default: True).
         operator_pool : list[str], optional
             List of quantum instruction names from which to sample to mutate the ansatz.
-            Defaults to None and the default pool ['rx', 'ry', 'rz', 'rzz'] is used.
+            Defaults to None and the default pool ['rx', 'ry', 'rz', 'cz'] is used.
         """
         
         if operator_pool is None:
@@ -55,48 +55,97 @@ class AdaptiveAnsatz:
         self.track_history = track_history
         
         ansatz_no_barriers = RemoveBarriers()(initial_ansatz)
-        # Re-arrange parameters
-        ansatz_re_arranged_params = AdaptiveAnsatz.re_arrange_gate_params(ansatz_no_barriers)
-        self.current_ansatz = ansatz_re_arranged_params
+        self.current_ansatz = ansatz_no_barriers.copy()
 
-        # Create a list of parameters
-        self.params: list[Parameter] = [Parameter(f"θ_{i}") for i in range(ansatz_re_arranged_params.num_parameters)]
+        # Set up parameters
+        self._validate_parameter_names()
+        self.update_params()
         
         # Initialize a list to track the history
         self.history: list[QuantumCircuit] = [self.current_ansatz.copy()] if track_history else []
 
-    @staticmethod
-    def re_arrange_gate_params(circuit: QuantumCircuit) -> QuantumCircuit:
+    def _validate_parameter_names(self) -> None:
+        pattern = re.compile(r"^θ_(\d+)$")
+        params = list(self.current_ansatz.parameters)
+
+        bad = [p.name for p in params if pattern.match(p.name) is None]
+        if bad:
+            raise ValueError(
+                "AdaptiveAnsatz requires parameter names of the form θ_i. "
+                f"Found invalid names: {bad}"
+            )
+
+        names = [p.name for p in params]
+        if len(names) != len(set(names)):
+            raise ValueError("Parameter names must be unique.")
+
+    @classmethod
+    def from_generic_circuit(
+        cls,
+        circuit: QuantumCircuit,
+        track_history: bool = True,
+        operator_pool: list[str] | None = None,
+        block_pool: dict[str, PoolBlock] | None = None,
+        remove_barriers: bool = True,
+    ) -> "AdaptiveAnsatz":
         """
-        Reassigns the parameters of a quantum circuit to a new, ordered list of parameters.
-
-        This is useful when you want to standardize or reorder the parameters in a circuit,
-        for example to allow consistent mapping and optimization, especially after modifying
-        the circuit structure (e.g., adding/removing gates).
-
-        The method constructs a new list of `Parameter` of the same length as the number of
-        parameters in the input circuit, and maps existing parameters to new parameters
-        indexed in order of appearance.
+        Build an AdaptiveAnsatz from an arbitrary parameterized circuit by
+        normalizing parameter names to θ_i.
 
         Parameters
         ----------
         circuit : QuantumCircuit
-            The quantum circuit whose parameters should be reassigned.
+            Arbitrary input circuit whose parameters may have any names.
+        track_history : bool, optional
+            Whether to track ansatz history.
+        operator_pool : list[str] | None, optional
+            Operator pool passed to the AdaptiveAnsatz constructor.
+        block_pool : dict[str, PoolBlock] | None, optional
+            Block pool passed to the AdaptiveAnsatz constructor.
+        remove_barriers : bool, optional
+            Whether to remove barriers before normalizing parameters.
+
+        Returns
+        -------
+        AdaptiveAnsatz
+            New AdaptiveAnsatz instance with normalized parameter names.
+        """
+        working_circuit = circuit.copy()
+
+        if remove_barriers:
+            working_circuit = RemoveBarriers()(working_circuit)
+
+        normalized_circuit = cls.normalize_parameter_names(working_circuit)
+
+        return cls(
+            initial_ansatz=normalized_circuit,
+            track_history=track_history,
+            operator_pool=operator_pool,
+            block_pool=block_pool,
+        )
+
+    @staticmethod
+    def normalize_parameter_names(circuit: QuantumCircuit) -> QuantumCircuit:
+        """
+        Return a copy of `circuit` with all active parameters renamed to θ_i.
+
+        Parameters
+        ----------
+        circuit : QuantumCircuit
+            Input circuit.
 
         Returns
         -------
         QuantumCircuit
-            A new quantum circuit with the same structure but with parameters replaced
-            by a new list of `Parameter`s.
+            Circuit with parameters renamed to θ_0, θ_1, ..., in the order
+            they appear in `circuit.parameters`.
         """
-        existing_params = circuit.parameters
-        num_params = circuit.num_parameters
-        
-        params = [Parameter(f"θ_{i}") for i in  range(num_params)]
-        param_map = {p: params[i] for i, p in enumerate(existing_params)}
-        
-        return circuit.assign_parameters(param_map)
-    
+        existing_params = list(circuit.parameters)
+        new_params = [Parameter(f"θ_{i}") for i in range(len(existing_params))]
+        param_map = {old: new for old, new in zip(existing_params, new_params)}
+
+        return circuit.assign_parameters(param_map, inplace=False)    
+
     def _new_parameters(self, n: int) -> list[Parameter]:
         """
         Create and register `n` fresh parameters.
@@ -376,10 +425,7 @@ class AdaptiveAnsatz:
         """
         Synchronize `self.params` with the parameters currently present in `current_ansatz`.
         """
-        self.params = sorted(
-            list(self.current_ansatz.parameters),
-            key=lambda p: int(p.name.split("_")[1])
-    )
+        self.params = list(self.current_ansatz.parameters)
 
     def copy(self) -> "AdaptiveAnsatz":
         """

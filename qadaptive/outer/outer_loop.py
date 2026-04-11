@@ -4,7 +4,7 @@ import numpy as np
 from typing import Any, Literal
 from dataclasses import dataclass, field
 
-from qiskit.circuit import QuantumCircuit
+from qiskit.circuit import QuantumCircuit, Parameter
 
 from qadaptive.core.mutation import TwoQMap, LockId
 from qadaptive.outer.action_definitions import ACTION_DEFINITIONS, ActionDefinition
@@ -60,6 +60,26 @@ class OuterStepResult:
     note: str | None = None
 
 @dataclass
+class ParameterMemoryCache:
+    """
+    Cache of latest parameter values after a training run, intended for reuse in 
+    future proposals.
+    
+    Attributes
+    ----------
+    parameters: list[Parameter]
+        List of current ansatz parameters.
+    parameter_names: list[str]
+        List of parameter names.
+    dictionary: dict[str, float]
+        Mapping from parameter names to their latest values.
+    """
+    
+    parameters: list[Parameter]
+    parameter_names: list[str]
+    dictionary: dict[str, float]
+
+@dataclass
 class ParameterMemoryRecord:
     """
     Record of the parameter-memory state after one inner-loop training run.
@@ -79,7 +99,7 @@ class ParameterMemoryRecord:
         ``"prune_two_qubit"``.
     accepted : bool
         Whether the corresponding outer-loop proposal was ultimately accepted.
-    values : dict[str, float]
+    values : ParameterMemoryCache
         Snapshot of the parameter memory at that point in the run.
     cost : float | None
         Objective value associated with this parameter state, if available.
@@ -88,7 +108,7 @@ class ParameterMemoryRecord:
     outer_iteration: int
     action: str
     accepted: bool
-    values: dict[str, float]
+    values: ParameterMemoryCache
     cost: float | None = None
     
 @dataclass
@@ -124,7 +144,7 @@ class ExperimentSnapshot:
     two_q_map : TwoQMap
         Mapping from circuit-data indices to ordered qubit pairs for the current
         two-qubit gates.
-    parameter_memory : dict[str, float]
+    parameter_memory : ParameterMemoryCache
         Current live parameter-value cache.
     parameter_memory_history : list[dict[str, float]]
         History of stored parameter-memory states accumulated so far.
@@ -139,7 +159,7 @@ class ExperimentSnapshot:
     ansatz: QuantumCircuit
     locked_gates: set[LockId]
     two_q_map: TwoQMap
-    parameter_memory: dict[str, float]
+    parameter_memory: ParameterMemoryCache
     parameter_memory_history: list[ParameterMemoryRecord]
     last_cost: float
     last_params: np.ndarray
@@ -243,7 +263,7 @@ class OuterStepPlan:
 
         if self.acceptance_mode not in ("outer", "internal", "force"):
             raise ValueError(
-                "`acceptance_mode` must be either 'outer' or 'internal'."
+                "`acceptance_mode` must be either 'outer', 'internal' or 'force'."
             )
 
         if len(self.actions) == 0:
