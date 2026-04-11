@@ -4,7 +4,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from numbers import Real
 from time import time
-from typing import Any, SupportsFloat
+from typing import Any
 import itertools
 import logging
 import warnings
