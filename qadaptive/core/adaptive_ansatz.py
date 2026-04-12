@@ -39,6 +39,8 @@ class AdaptiveAnsatz:
         operator_pool : list[str], optional
             List of quantum instruction names from which to sample to mutate the ansatz.
             Defaults to None and the default pool ['rx', 'ry', 'rz', 'cz'] is used.
+        block_pool : dict[str, PoolBlock], optional
+            Mapping of block names to PoolBlock objects for structured ansatz modifications.
         """
         
         if operator_pool is None:
