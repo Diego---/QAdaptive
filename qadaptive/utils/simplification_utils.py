@@ -161,7 +161,7 @@ class MergeConsecutiveRotations(TransformationPass):
     
     @staticmethod
     def _reduce_run_keep_oldest(dag: DAGCircuit, run: list) -> None:
-        if len(run) < 2:
+        if len(run) <= 3:
             return
 
         survivor = min(run, key=_node_theta_index)
