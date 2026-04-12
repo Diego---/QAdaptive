@@ -1754,6 +1754,13 @@ class MutableAnsatzExperiment:
                 )
             score_before += float(complexity_penalty(ansatz_before))
             score_after += float(complexity_penalty(ansatz_after))
+            
+        logger.info(
+            "Evaluating outer acceptance: score_before=%.10f, score_after=%.10f, accept_tol=%.10f.",
+            score_before,
+            score_after,
+            accept_tol,
+        )
 
         return score_after <= score_before - accept_tol
 
