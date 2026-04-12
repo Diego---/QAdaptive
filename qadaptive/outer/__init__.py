@@ -1,6 +1,8 @@
 from .outer_loop import ActionSpec, OuterStepPlan
 from .plan_builders import (
+    default_append_index_policy,
     random_insert_index_policy,
+    between_2qg_indices_policy,
     build_star_growth_plan,
     build_uniform_growth_plan,
     build_nearest_neighbor_growth_plan,
@@ -15,7 +17,9 @@ __all__ = [
     "MutableAnsatzExperiment",
     "ActionSpec",
     "OuterStepPlan",
+    "default_append_index_policy",
     "random_insert_index_policy",
+    "between_2qg_indices_policy",
     "build_star_growth_plan",
     "build_nearest_neighbor_growth_plan",
     "build_uniform_growth_plan",
