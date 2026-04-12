@@ -102,6 +102,198 @@ def select_star_targets(
 
     return ordered
 
+def select_nearest_neighbor_pairs(
+    num_qubits: int,
+    two_q_map: TwoQMap,
+    max_pairs: int | None = None,
+    periodic: bool = False,
+    allowed_pairs: list[tuple[int, int]] | None = None,
+    forbidden_pairs: list[tuple[int, int]] | None = None,
+) -> list[tuple[int, int]]:
+    """
+    Select nearest-neighbor qubit pairs for growth.
+
+    Pairs are prioritized by how rarely they appear in the current ansatz,
+    favoring absent or lightly used nearest-neighbor interactions first.
+
+    Parameters
+    ----------
+    num_qubits : int
+        Total number of qubits in the ansatz.
+    two_q_map : TwoQMap
+        Current two-qubit gate map.
+    max_pairs : int | None, optional
+        Maximum number of nearest-neighbor pairs to return. If None, all
+        eligible nearest-neighbor pairs are returned.
+    periodic : bool, optional
+        If True, also include the ring-closing pair ``(num_qubits - 1, 0)``.
+        If False, use an open linear chain. Default is False.
+    allowed_pairs : list[tuple[int, int]] | None, optional
+        Explicit whitelist of allowed nearest-neighbor pairs. If None, all
+        nearest-neighbor pairs implied by `num_qubits` and `periodic` are
+        considered.
+    forbidden_pairs : list[tuple[int, int]] | None, optional
+        Explicit blacklist of forbidden pairs.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        Ordered list of selected nearest-neighbor pairs from most preferred
+        to least preferred.
+
+    Raises
+    ------
+    ValueError
+        If `num_qubits` is less than 2.
+    """
+    if num_qubits < 2:
+        raise ValueError("`num_qubits` must be at least 2.")
+
+    base_pairs = [(q, q + 1) for q in range(num_qubits - 1)]
+    if periodic:
+        base_pairs.append((num_qubits - 1, 0))
+
+    if allowed_pairs is None:
+        candidates = list(base_pairs)
+    else:
+        base_set = set(base_pairs)
+        candidates = [pair for pair in allowed_pairs if pair in base_set]
+
+    if forbidden_pairs is not None:
+        forbidden = set(forbidden_pairs)
+        candidates = [pair for pair in candidates if pair not in forbidden]
+
+    counts = pair_counts(two_q_map)
+
+    ordered = sorted(
+        candidates,
+        key=lambda pair: (counts.get(pair, 0), pair[0], pair[1]),
+    )
+
+    if max_pairs is not None:
+        ordered = ordered[:max_pairs]
+
+    return ordered
+
+
+def build_nearest_neighbor_growth_plan(
+    experiment: MutableAnsatzExperiment,
+    block_name: str = "cx_identity",
+    max_insertions: int | None = None,
+    periodic: bool = False,
+    insert_index_policy: Callable | None = None,
+    force_accept: bool = False,
+    allowed_pairs: list[tuple[int, int]] | None = None,
+    forbidden_pairs: list[tuple[int, int]] | None = None,
+    add_simplify: bool = True,
+    simplify_kwargs: dict[str, Any] | None = None,
+    label: str | None = None,
+) -> OuterStepPlan:
+    """
+    Build a macro-plan that grows entangling structure only between
+    nearest-neighbor qubits.
+
+    The plan inserts identity-initialized two-qubit blocks on selected
+    nearest-neighbor pairs, then optionally appends a simplification action.
+
+    Pairs are chosen by favoring nearest-neighbor interactions that are
+    currently absent or lightly used in the ansatz.
+
+    Parameters
+    ----------
+    experiment : MutableAnsatzExperiment
+        Experiment instance used to access the experiment state.
+    block_name : str, optional
+        Name of the block to insert for each selected pair.
+    max_insertions : int | None, optional
+        Maximum number of nearest-neighbor insertions to include in the plan.
+        If None, all eligible nearest-neighbor pairs are used.
+    periodic : bool, optional
+        If True, include the ring-closing nearest-neighbor pair
+        ``(num_qubits - 1, 0)``. If False, use an open linear chain.
+        Default is False.
+    insert_index_policy : Callable | None, optional
+        Function that determines the circuit-data index for each insertion.
+        It should have the signature
+        ``(experiment, target_qubits, insertion_number) -> int``.
+        If None, a default policy that appends at the end of the circuit is used.
+    force_accept : bool, optional
+        Whether to set the acceptance mode to ``"force"``, which accepts all
+        changes made by the plan without evaluating the cost.
+    allowed_pairs : list[tuple[int, int]] | None, optional
+        Explicit whitelist of allowed nearest-neighbor pairs.
+    forbidden_pairs : list[tuple[int, int]] | None, optional
+        Explicit blacklist of forbidden nearest-neighbor pairs.
+    add_simplify : bool, optional
+        Whether to append a simplification action after the insertion burst.
+    simplify_kwargs : dict[str, Any] | None, optional
+        Keyword arguments for the simplification action.
+    label : str | None, optional
+        Optional descriptive label for the plan.
+
+    Returns
+    -------
+    OuterStepPlan
+        Nearest-neighbor growth plan.
+
+    Raises
+    ------
+    ValueError
+        If no eligible nearest-neighbor pairs are available.
+    """
+    if insert_index_policy is None:
+        insert_index_policy = default_append_index_policy
+
+    pairs = select_nearest_neighbor_pairs(
+        num_qubits=experiment.ansatz.num_qubits,
+        two_q_map=experiment._2qbg_positions,
+        max_pairs=max_insertions,
+        periodic=periodic,
+        allowed_pairs=allowed_pairs,
+        forbidden_pairs=forbidden_pairs,
+    )
+
+    if not pairs:
+        raise ValueError("No eligible nearest-neighbor pairs are available for growth.")
+
+    actions: list[ActionSpec] = []
+
+    for insertion_number, pair in enumerate(pairs):
+        target_qubits = list(pair)
+        circ_ind = insert_index_policy(
+            experiment,
+            target_qubits,
+            insertion_number,
+        )
+
+        actions.append(
+            ActionSpec(
+                action=INSERT_BLOCK,
+                kwargs={
+                    "block_name": block_name,
+                    "qubits": target_qubits,
+                    "circ_ind": circ_ind,
+                },
+                label=f"{block_name}_{pair[0]}_{pair[1]}",
+            )
+        )
+
+    if add_simplify:
+        actions.append(
+            ActionSpec(
+                action=SIMPLIFY,
+                kwargs={} if simplify_kwargs is None else dict(simplify_kwargs),
+                label="simplify_after_nn_growth",
+            )
+        )
+
+    return OuterStepPlan(
+        name="nearest_neighbor_growth",
+        actions=actions,
+        acceptance_mode="force" if force_accept else "outer",
+        label=label,
+    )
+
 def build_star_growth_plan(
     experiment: MutableAnsatzExperiment,
     center_qubit: int = 0,
