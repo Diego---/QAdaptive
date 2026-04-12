@@ -71,7 +71,6 @@ def _build_cx_identity(params: list[Parameter]) -> QuantumCircuit:
     Two-qubit identity-initializable block.
 
     The block is
-        CX(0, 1)
         RZ(b) on q0
         RX(c) on q0
         CX(0, 1)
@@ -93,7 +92,6 @@ def _build_cz_identity(params: list[Parameter]) -> QuantumCircuit:
     Two-qubit identity-initializable block.
 
     The block is
-        CZ(0, 1)
         RY(b) on q0
         RX(c) on q0
         CZ(0, 1)
