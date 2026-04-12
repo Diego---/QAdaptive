@@ -81,7 +81,7 @@ def operation_names(circuit: QuantumCircuit) -> list[str]:
 
 def test_adaptive_ansatz_initialization():
     """AdaptiveAnsatz should detect the trainable parameters in a complex ansatz."""
-    adaptive_ansatz = AdaptiveAnsatz(ansatz)
+    adaptive_ansatz = AdaptiveAnsatz.from_generic_circuit(ansatz)
     assert len(adaptive_ansatz.get_current_ansatz().parameters) == 8
 
 
@@ -93,7 +93,7 @@ def test_adaptive_ansatz_initialization():
 def test_add_gate_at_index():
     """Adding a gate at a specific index should modify the circuit in place."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(circuit)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit)
 
     adapt_ansatz.add_gate_at_index("rx", 0, [0])
 
@@ -104,7 +104,7 @@ def test_add_gate_at_index():
 
 def test_remove_gate_at_index():
     """Removing gates by index should update circuit structure and parameters."""
-    adapt_ansatz = AdaptiveAnsatz(ansatz)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(ansatz)
 
     adapt_ansatz.remove_gate_by_index([8, 9])
     assert (
@@ -127,7 +127,7 @@ def test_remove_gate_at_index():
 def test_history_tracking():
     """With history tracking enabled, each edit should append one snapshot."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(circuit, track_history=True)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, track_history=True)
 
     initial_history_len = len(adapt_ansatz.history)
 
@@ -142,7 +142,7 @@ def test_history_tracking():
 def test_no_history_tracking():
     """With history tracking disabled, edits should not be stored."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(circuit, track_history=False)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, track_history=False)
 
     initial_history_len = len(adapt_ansatz.history)
 
@@ -156,7 +156,7 @@ def test_no_history_tracking():
 def test_history_tracking_after_block_addition():
     """Adding a whole block should append exactly one snapshot to history."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(
         circuit,
         track_history=True,
         block_pool=DEFAULT_BLOCK_POOL,
@@ -179,7 +179,7 @@ def test_history_tracking_after_block_addition():
 def test_rollback():
     """Rollback should restore the circuit to an earlier state."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(circuit, track_history=True)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, track_history=True)
 
     initial_ansatz = adapt_ansatz.get_current_ansatz().copy()
 
@@ -200,7 +200,7 @@ def test_rollback():
 def test_rollback_single_qubit_block_addition():
     """Rollback should undo insertion of a one-qubit block."""
     circuit = QuantumCircuit(1)
-    adapt_ansatz = AdaptiveAnsatz(
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(
         circuit,
         track_history=True,
         block_pool=DEFAULT_BLOCK_POOL,
@@ -229,7 +229,7 @@ def test_rollback_single_qubit_block_addition():
 def test_rollback_two_qubit_block_addition():
     """Rollback should undo insertion of a two-qubit block."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(
         circuit,
         track_history=True,
         block_pool=DEFAULT_BLOCK_POOL,
@@ -258,7 +258,7 @@ def test_rollback_two_qubit_block_addition():
 def test_rollback_block_preserves_previous_gate_edit():
     """Rolling back a block addition should preserve earlier edits."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(
         circuit,
         track_history=True,
         block_pool=DEFAULT_BLOCK_POOL,
@@ -282,7 +282,7 @@ def test_rollback_block_preserves_previous_gate_edit():
 def test_add_single_qubit_block_at_index():
     """A one-qubit identity-initializable block should be inserted correctly."""
     circuit = QuantumCircuit(1)
-    adapt_ansatz = AdaptiveAnsatz(circuit, block_pool=DEFAULT_BLOCK_POOL)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, block_pool=DEFAULT_BLOCK_POOL)
 
     adapt_ansatz.add_block_at_index("rz_rx_rz", 0, [0])
 
@@ -295,7 +295,7 @@ def test_add_single_qubit_block_at_index():
 def test_add_two_qubit_block_at_index():
     """A two-qubit identity-initializable block should be inserted correctly."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(circuit, block_pool=DEFAULT_BLOCK_POOL)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, block_pool=DEFAULT_BLOCK_POOL)
 
     adapt_ansatz.add_block_at_index("cx_identity", 0, [0, 1])
 
@@ -308,7 +308,7 @@ def test_add_two_qubit_block_at_index():
 def test_add_block_wrong_qubit_count_raises():
     """Adding a block to the wrong number of qubits should raise."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(circuit, block_pool=DEFAULT_BLOCK_POOL)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, block_pool=DEFAULT_BLOCK_POOL)
 
     with pytest.raises(ValueError):
         adapt_ansatz.add_block_at_index("cx_identity", 0, [0])
@@ -318,7 +318,7 @@ def test_add_block_wrong_qubit_count_raises():
 def test_add_unknown_block_raises():
     """Adding an unknown block name should raise."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(circuit, block_pool=DEFAULT_BLOCK_POOL)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, block_pool=DEFAULT_BLOCK_POOL)
 
     with pytest.raises(AssertionError):
         adapt_ansatz.add_block_at_index("not_a_block", 0, [0, 1])
@@ -332,7 +332,7 @@ def test_add_unknown_block_raises():
 def test_rz_rx_rz_block_is_identity_at_zero():
     """The single-qubit block should evaluate to identity at zero parameters."""
     circuit = QuantumCircuit(1)
-    adapt_ansatz = AdaptiveAnsatz(circuit, block_pool=DEFAULT_BLOCK_POOL)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, block_pool=DEFAULT_BLOCK_POOL)
 
     adapt_ansatz.add_block_at_index("rz_rx_rz", 0, [0])
 
@@ -347,7 +347,7 @@ def test_rz_rx_rz_block_is_identity_at_zero():
 def test_cx_identity_block_is_identity_at_zero():
     """The two-qubit block should evaluate to identity at zero parameters."""
     circuit = QuantumCircuit(2)
-    adapt_ansatz = AdaptiveAnsatz(circuit, block_pool=DEFAULT_BLOCK_POOL)
+    adapt_ansatz = AdaptiveAnsatz.from_generic_circuit(circuit, block_pool=DEFAULT_BLOCK_POOL)
 
     adapt_ansatz.add_block_at_index("cx_identity", 0, [0, 1])
 
@@ -373,7 +373,7 @@ def test_initialization_removes_barriers_and_renames_parameters_in_order():
     qc.barrier()
     qc.rz(th[0], 0)
 
-    adaptive = AdaptiveAnsatz(qc)
+    adaptive = AdaptiveAnsatz.from_generic_circuit(qc)
 
     assert operation_names(adaptive.current_ansatz) == ["rx", "rz"]
     assert [p.name for p in adaptive.current_ansatz.parameters] == ["θ_0", "θ_1"]
@@ -383,7 +383,7 @@ def test_initialization_removes_barriers_and_renames_parameters_in_order():
 
 def test_copy_is_independent_from_original():
     qc = QuantumCircuit(1)
-    adaptive = AdaptiveAnsatz(qc, block_pool=DEFAULT_BLOCK_POOL)
+    adaptive = AdaptiveAnsatz.from_generic_circuit(qc, block_pool=DEFAULT_BLOCK_POOL)
     copied = adaptive.copy()
 
     copied.add_gate_at_index("rx", 0, [0])
@@ -398,7 +398,7 @@ def test_copy_is_independent_from_original():
 
 def test_add_random_gate_uses_operator_pool_and_updates_history(monkeypatch):
     qc = QuantumCircuit(2)
-    adaptive = AdaptiveAnsatz(qc, track_history=True, operator_pool=["cz"])
+    adaptive = AdaptiveAnsatz.from_generic_circuit(qc, track_history=True, operator_pool=["cz"])
 
     monkeypatch.setattr(random, "randint", lambda a, b: 0)
     monkeypatch.setattr(random, "choice", lambda seq: "cz")
@@ -416,7 +416,7 @@ def test_add_random_gate_uses_operator_pool_and_updates_history(monkeypatch):
 
 def test_add_random_block_uses_block_pool_and_updates_history(monkeypatch):
     qc = QuantumCircuit(2)
-    adaptive = AdaptiveAnsatz(qc, track_history=True, block_pool=DEFAULT_BLOCK_POOL)
+    adaptive = AdaptiveAnsatz.from_generic_circuit(qc, track_history=True, block_pool=DEFAULT_BLOCK_POOL)
 
     monkeypatch.setattr(random, "randint", lambda a, b: 0)
     monkeypatch.setattr(random, "choice", lambda seq: "cz_identity")
@@ -436,7 +436,7 @@ def test_add_random_block_uses_block_pool_and_updates_history(monkeypatch):
 def test_remove_gate_by_index_raises_for_out_of_range_index():
     qc = QuantumCircuit(1)
     qc.rx(0.1, 0)
-    adaptive = AdaptiveAnsatz(qc)
+    adaptive = AdaptiveAnsatz.from_generic_circuit(qc)
 
     with pytest.raises(IndexError):
         adaptive.remove_gate_by_index(1)
@@ -445,7 +445,7 @@ def test_remove_gate_by_index_raises_for_out_of_range_index():
 
 def test_add_block_at_index_raises_for_out_of_range_index():
     qc = QuantumCircuit(2)
-    adaptive = AdaptiveAnsatz(qc, block_pool=DEFAULT_BLOCK_POOL)
+    adaptive = AdaptiveAnsatz.from_generic_circuit(qc, block_pool=DEFAULT_BLOCK_POOL)
 
     with pytest.raises(IndexError):
         adaptive.add_block_at_index("cx_identity", 1, [0, 1])
@@ -454,7 +454,7 @@ def test_add_block_at_index_raises_for_out_of_range_index():
 
 def test_rollback_raises_when_history_is_insufficient():
     qc = QuantumCircuit(1)
-    adaptive = AdaptiveAnsatz(qc, track_history=True)
+    adaptive = AdaptiveAnsatz.from_generic_circuit(qc, track_history=True)
 
     with pytest.raises(ValueError):
         adaptive.rollback(1)
