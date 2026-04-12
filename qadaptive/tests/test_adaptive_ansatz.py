@@ -168,7 +168,7 @@ def test_history_tracking_after_block_addition():
 
     assert len(adapt_ansatz.history) == initial_history_len + 1
     assert len(adapt_ansatz.history[0].data) == 0
-    assert operation_names(adapt_ansatz.history[-1]) == ['cx', 'rz', 'rx', 'rz', 'rx', 'cx']
+    assert operation_names(adapt_ansatz.history[-1]) == ['ry', 'rz', 'cx', 'ry', 'rz', 'cx']
 
 
 # -----------------------------------------------------------------------------
@@ -267,7 +267,7 @@ def test_rollback_block_preserves_previous_gate_edit():
     adapt_ansatz.add_gate_at_index("rx", 0, [0])
     adapt_ansatz.add_block_at_index("cx_identity", 1, [0, 1])
 
-    assert operation_names(adapt_ansatz.get_current_ansatz()) == ['rx', 'cx', 'rz', 'rx', 'rz', 'rx', 'cx']
+    assert operation_names(adapt_ansatz.get_current_ansatz()) == ['rx', 'ry', 'rz', 'cx', 'ry', 'rz', 'cx']
 
     adapt_ansatz.rollback(1)
 
@@ -299,7 +299,7 @@ def test_add_two_qubit_block_at_index():
 
     adapt_ansatz.add_block_at_index("cx_identity", 0, [0, 1])
 
-    assert operation_names(adapt_ansatz.get_current_ansatz()) == ['cx', 'rz', 'rx', 'rz', 'rx', 'cx']
+    assert operation_names(adapt_ansatz.get_current_ansatz()) == ['ry', 'rz', 'cx', 'ry', 'rz', 'cx']
     assert len(adapt_ansatz.get_current_ansatz().parameters) == 4
     assert len(adapt_ansatz.params) == 4
 
@@ -427,7 +427,7 @@ def test_add_random_block_uses_block_pool_and_updates_history(monkeypatch):
     assert block_name == "cz_identity"
     assert index == 0
     assert len(qubits) == 2
-    assert operation_names(adaptive.current_ansatz) == ["cz", "ry", "rx", "cz", "ry", "rx"]
+    assert operation_names(adaptive.current_ansatz) == ['rx', 'ry', 'cz', 'rx', 'ry', 'cz']
     assert len(adaptive.params) == 4
     assert len(adaptive.history) == 2
 
