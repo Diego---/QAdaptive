@@ -1,7 +1,7 @@
 from qiskit import QuantumCircuit
 from qiskit.transpiler import PassManager
 
-from qadaptive.utils.utils import (
+from qadaptive.utils.simplification_utils import (
     RemoveFinalRZ,
     RemoveInitialRZ,
     RemoveInputControlledGates,

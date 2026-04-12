@@ -41,7 +41,7 @@ from qadaptive.outer.outer_loop import (
     ActionSpec,
     OuterStepPlan
 )
-from qadaptive.utils.utils import create_callback_args
+from qadaptive.training.optimizers import create_callback_args
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
