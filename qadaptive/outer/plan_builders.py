@@ -447,6 +447,8 @@ def build_prune_sweep_plan(
     alpha: float = 0.1,
     accept_tol: float = 0.2,
     label: str | None = None,
+    add_simplify: bool = False,
+    simplify_kwargs: dict[str, Any] | None = None,
 ) -> OuterStepPlan:
     """
     Build a macro-plan that performs a sweep of targeted prune attempts over
@@ -507,6 +509,15 @@ def build_prune_sweep_plan(
                     "accept_tol": accept_tol,
                 },
                 label=f"prune_{pair}_{occurrence}",
+            )
+        )
+        
+    if add_simplify:
+        actions.append(
+            ActionSpec(
+                action=SIMPLIFY,
+                kwargs={} if simplify_kwargs is None else dict(simplify_kwargs),
+                label="simplify_after_prune_sweep",
             )
         )
 
