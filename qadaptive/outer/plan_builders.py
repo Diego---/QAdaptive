@@ -21,6 +21,21 @@ def random_insert_index_policy(experiment, target, insertion_number: int) -> int
     num_indices = len(experiment.ansatz.data)
     return random.randint(0, num_indices)
 
+def between_2qg_indices_policy(experiment, target, insertion_number: int) -> int:
+    """
+    Insert at a random index between a random pair of consecutive two-qubit gates.
+
+    If there are fewer than two two-qubit gates, append at the end.
+    """
+    two_q_indices = sorted(experiment._2qbg_positions.keys())
+
+    if len(two_q_indices) < 2:
+        return len(experiment.ansatz.data)
+
+    left_index = random.choice(two_q_indices[:-1])
+    right_index = two_q_indices[two_q_indices.index(left_index) + 1]
+    return random.randint(left_index + 1, right_index)
+
 def pair_counts(two_q_map: TwoQMap) -> dict[tuple[int, int], int]:
     """
     Return the number of occurrences of each ordered two-qubit pair.
