@@ -18,5 +18,5 @@ dependencies = [
     "qiskit_algorithms >= 0.3.0"
 ]
 
-[tool.setuptools]
-packages = ["qadaptive"]
+[tool.setuptools.packages.find]
+include = ["qadaptive*"]
