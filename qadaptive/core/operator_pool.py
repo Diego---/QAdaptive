@@ -110,6 +110,40 @@ def _build_cz_identity(params: list[Parameter]) -> QuantumCircuit:
     qc.cz(0, 1)
     return qc
 
+def _build_single_rxx_block(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit identity-initializable block.
+
+    The block is
+        RZ(a) on q0
+        RXX(b) on (q0, q1)
+        RZ(c) on q1
+
+    For all parameters initialized to zero, the is the identity.
+    """
+    qc = QuantumCircuit(2, name="single_cx_block")
+    qc.rz(params[0], 0)
+    qc.rxx(params[1], 0, 1)
+    qc.rz(params[2], 1)
+    return qc
+
+def _build_single_rzz_block(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit identity-initializable block.
+
+    The block is
+        RX(a) on q0
+        RZZ(b) on (q0, q1)
+        RX(c) on q1
+
+    For all parameters initialized to zero, the block is the identity.
+    """
+    qc = QuantumCircuit(2, name="single_cz_block")
+    qc.rx(params[0], 0)
+    qc.rzz(params[1], 0, 1)
+    qc.rx(params[2], 1)
+    return qc
+
 def _build_single_cx_block(params: list[Parameter]) -> QuantumCircuit:
     """
     Two-qubit non-identity-initializable block.
@@ -121,7 +155,7 @@ def _build_single_cx_block(params: list[Parameter]) -> QuantumCircuit:
         RZ(d) on q1
         RX(e) on q1
 
-    For all parameters initialized to zero, the block a CX.
+    For all parameters initialized to zero, the block is a CX.
     """
     qc = QuantumCircuit(2, name="single_cx_block")
     qc.rz(params[0], 0)
@@ -183,5 +217,17 @@ DEFAULT_BLOCK_POOL: dict[str, PoolBlock] = {
         num_qubits=2,
         num_parameters=4,
         builder=_build_single_cz_block,
+    ),
+    "single_rxx_block": PoolBlock(
+        name="single_rxx_block",
+        num_qubits=2,
+        num_parameters=3,
+        builder=_build_single_rxx_block,
+    ),
+    "single_rzz_block": PoolBlock(
+        name="single_rzz_block",
+        num_qubits=2,
+        num_parameters=3,
+        builder=_build_single_rzz_block,
     ),
 }
