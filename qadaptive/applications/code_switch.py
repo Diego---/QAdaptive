@@ -6,6 +6,7 @@ from qiskit.quantum_info import (
     DensityMatrix,
     Statevector,
     Operator,
+    SparsePauliOp,
     random_statevector,
     partial_trace,
     state_fidelity
