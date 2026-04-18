@@ -8,7 +8,7 @@ from qiskit_algorithms.optimizers.optimizer import (
 )
 
 from qadaptive.training.trainer import InnerLoopTrainer
-from qadaptive.training.stepwise_optimizer import StepwiseOptimizer
+from qadaptive.training.optimizers.stepwise_optimizer import StepwiseOptimizer
 
 
 class DummyOptimizer(StepwiseOptimizer):

@@ -19,7 +19,7 @@ from qiskit_algorithms.optimizers.optimizer import (
 )
 from qiskit_algorithms.utils import algorithm_globals
 
-from ..stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
+from .stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
 
 logger = logging.getLogger(__name__)
 

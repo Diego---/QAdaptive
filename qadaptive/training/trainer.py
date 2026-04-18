@@ -9,7 +9,7 @@ from qiskit_algorithms.optimizers.optimizer import OptimizerResult
 
 from .history import IterationRecord, TrainingRunRecord
 from .optimizers import SPSA
-from .stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
+from .optimizers.stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
 
 logger = logging.getLogger(__name__)
 
