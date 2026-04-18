@@ -112,6 +112,7 @@ def plot_parameter_lifelines(
     figsize: tuple[int, int] = (12, 6),
     linewidth: float = 1.5,
     legend_outside: bool = True,
+    show_legend: bool = True,
 ) -> tuple[plt.Figure, plt.Axes]:
     """
     Plot the evolution of named parameters across global plotting indices.
@@ -128,6 +129,8 @@ def plot_parameter_lifelines(
         Line width for parameter trajectories. Default is ``1.5``.
     legend_outside : bool, optional
         If True, place the legend outside the plotting area. Default is True.
+    show_legend: bool, optional
+        Whether to show legend.
 
     Returns
     -------
@@ -161,17 +164,18 @@ def plot_parameter_lifelines(
     ax.set_ylabel("Parameter value")
     ax.set_title("Named parameter trajectories")
 
-    if legend_outside:
-        ax.legend(
-            loc="upper left",
-            bbox_to_anchor=(1.02, 1.0),
-            borderaxespad=0.0,
-            fontsize=8,
-            ncol=1,
-        )
-        fig.subplots_adjust(right=0.72)
-    else:
-        ax.legend(ncol=2, fontsize=8)
+    if show_legend:
+        if legend_outside:
+            ax.legend(
+                loc="upper left",
+                bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0,
+                fontsize=8,
+                ncol=1,
+            )
+            fig.subplots_adjust(right=0.72)
+        else:
+            ax.legend(ncol=2, fontsize=8)
 
     return fig, ax
 
