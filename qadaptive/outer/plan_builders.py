@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import random
-from collections import Counter
 from typing import Any, Callable, TYPE_CHECKING
 
 from qadaptive.outer.action_definitions import INSERT_BLOCK, SIMPLIFY, PRUNE_TWO_QUBIT
 from qadaptive.outer.outer_loop import OuterStepPlan, ActionSpec
 from qadaptive.core.mutation import TwoQMap
+
+from .plan_helpers import (
+    select_star_targets,
+    select_nearest_neighbor_pairs,
+    select_most_frequent_pair_gates
+)
 
 if TYPE_CHECKING:
     from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
@@ -35,161 +40,6 @@ def between_2qg_indices_policy(experiment, target, insertion_number: int) -> int
     left_index = random.choice(two_q_indices[:-1])
     right_index = two_q_indices[two_q_indices.index(left_index) + 1]
     return random.randint(left_index + 1, right_index)
-
-def pair_counts(two_q_map: TwoQMap) -> dict[tuple[int, int], int]:
-    """
-    Return the number of occurrences of each ordered two-qubit pair.
-
-    Parameters
-    ----------
-    two_q_map : TwoQMap
-        Mapping from circuit-data indices to ordered qubit pairs.
-
-    Returns
-    -------
-    dict[tuple[int, int], int]
-        Dictionary mapping each ordered pair to its occurrence count.
-    """
-    return dict(Counter(two_q_map.values()))
-
-def select_star_targets(
-    num_qubits: int,
-    two_q_map: TwoQMap,
-    center_qubit: int = 0,
-    max_targets: int | None = None,
-    allowed_targets: list[int] | None = None,
-    forbidden_targets: list[int] | None = None,
-) -> list[int]:
-    """
-    Select target qubits for star-centered growth around one qubit.
-
-    Targets are prioritized by how rarely the ordered pair
-    ``(center_qubit, target)`` appears in the current ansatz. This favors
-    pairs that are absent or underused.
-
-    Parameters
-    ----------
-    num_qubits : int
-        Total number of qubits in the ansatz.
-    two_q_map : TwoQMap
-        Current two-qubit gate map.
-    center_qubit : int, optional
-        Central qubit from which star-like growth is generated.
-    max_targets : int | None, optional
-        Maximum number of targets to return. If None, all eligible targets are
-        returned.
-    allowed_targets : list[int] | None, optional
-        Explicit whitelist of allowed target qubits. If None, all qubits except
-        the center are considered.
-    forbidden_targets : list[int] | None, optional
-        Explicit blacklist of forbidden target qubits.
-
-    Returns
-    -------
-    list[int]
-        Ordered list of selected target qubits, from most preferred to least
-        preferred.
-    """
-    if center_qubit < 0 or center_qubit >= num_qubits:
-        raise ValueError(
-            f"`center_qubit` must be between 0 and {num_qubits - 1}, got {center_qubit}."
-        )
-
-    if allowed_targets is None:
-        candidates = [q for q in range(num_qubits) if q != center_qubit]
-    else:
-        candidates = [q for q in allowed_targets if q != center_qubit]
-
-    if forbidden_targets is not None:
-        forbidden = set(forbidden_targets)
-        candidates = [q for q in candidates if q not in forbidden]
-
-    counts = pair_counts(two_q_map)
-
-    # Prefer absent / lightly used pairs first, break ties by target index.
-    ordered = sorted(
-        candidates,
-        key=lambda q: (counts.get((center_qubit, q), 0), q),
-    )
-
-    if max_targets is not None:
-        ordered = ordered[:max_targets]
-
-    return ordered
-
-def select_nearest_neighbor_pairs(
-    num_qubits: int,
-    two_q_map: TwoQMap,
-    max_pairs: int | None = None,
-    periodic: bool = False,
-    allowed_pairs: list[tuple[int, int]] | None = None,
-    forbidden_pairs: list[tuple[int, int]] | None = None,
-) -> list[tuple[int, int]]:
-    """
-    Select nearest-neighbor qubit pairs for growth.
-
-    Pairs are prioritized by how rarely they appear in the current ansatz,
-    favoring absent or lightly used nearest-neighbor interactions first.
-
-    Parameters
-    ----------
-    num_qubits : int
-        Total number of qubits in the ansatz.
-    two_q_map : TwoQMap
-        Current two-qubit gate map.
-    max_pairs : int | None, optional
-        Maximum number of nearest-neighbor pairs to return. If None, all
-        eligible nearest-neighbor pairs are returned.
-    periodic : bool, optional
-        If True, also include the ring-closing pair ``(num_qubits - 1, 0)``.
-        If False, use an open linear chain. Default is False.
-    allowed_pairs : list[tuple[int, int]] | None, optional
-        Explicit whitelist of allowed nearest-neighbor pairs. If None, all
-        nearest-neighbor pairs implied by `num_qubits` and `periodic` are
-        considered.
-    forbidden_pairs : list[tuple[int, int]] | None, optional
-        Explicit blacklist of forbidden pairs.
-
-    Returns
-    -------
-    list[tuple[int, int]]
-        Ordered list of selected nearest-neighbor pairs from most preferred
-        to least preferred.
-
-    Raises
-    ------
-    ValueError
-        If `num_qubits` is less than 2.
-    """
-    if num_qubits < 2:
-        raise ValueError("`num_qubits` must be at least 2.")
-
-    base_pairs = [(q, q + 1) for q in range(num_qubits - 1)]
-    if periodic:
-        base_pairs.append((num_qubits - 1, 0))
-
-    if allowed_pairs is None:
-        candidates = list(base_pairs)
-    else:
-        base_set = set(base_pairs)
-        candidates = [pair for pair in allowed_pairs if pair in base_set]
-
-    if forbidden_pairs is not None:
-        forbidden = set(forbidden_pairs)
-        candidates = [pair for pair in candidates if pair not in forbidden]
-
-    counts = pair_counts(two_q_map)
-
-    ordered = sorted(
-        candidates,
-        key=lambda pair: (counts.get(pair, 0), pair[0], pair[1]),
-    )
-
-    if max_pairs is not None:
-        ordered = ordered[:max_pairs]
-
-    return ordered
-
 
 def build_nearest_neighbor_growth_plan(
     experiment: MutableAnsatzExperiment,
@@ -730,6 +580,137 @@ def build_prune_sweep_plan(
 
     return OuterStepPlan(
         name="prune_sweep",
+        actions=actions,
+        acceptance_mode="internal",
+        label=label,
+    )
+
+def build_targeted_prune_plan(
+    experiment: MutableAnsatzExperiment,
+    targeting_function: Callable[[MutableAnsatzExperiment], TwoQMap] | None = None,
+    max_num_2q_gates: int = 1,
+    temperature: float = 0.08,
+    alpha: float = 0.1,
+    accept_tol: float = 0.2,
+    label: str | None = None,
+    add_simplify: bool = False,
+    simplify_kwargs: dict[str, Any] | None = None,
+) -> OuterStepPlan:
+    """
+    Build a macro-plan that performs targeted prune attempts on selected
+    two-qubit gates.
+
+    The targeted gates are stored in the plan using stable pair-occurrence
+    identifiers rather than raw circuit-data indices, so that later actions in
+    the same plan can still target the intended gates after earlier accepted
+    removals shift circuit indices.
+
+    Parameters
+    ----------
+    experiment : MutableAnsatzExperiment
+        Experiment instance used to access the current two-qubit gate map.
+    targeting_function : Callable[[MutableAnsatzExperiment], TwoQMap] | None, optional
+        Function that takes the experiment and returns a subset of
+        ``experiment._2qbg_positions`` indicating which two-qubit gates should
+        be targeted for pruning.
+
+        The returned mapping must have circuit-data indices as keys and ordered
+        qubit pairs as values.
+
+        If None, a default targeting function is used that selects all gates
+        belonging to the most frequent two-qubit pair.
+    max_num_2q_gates : int, optional
+        Maximum number of targeted two-qubit gates to include in the plan.
+        Defaults to a single gate.
+    temperature : float, optional
+        Temperature parameter passed to the pruning routine.
+    alpha : float, optional
+        Locking-probability scaling parameter passed to the pruning routine.
+    accept_tol : float, optional
+        Acceptance tolerance passed to the pruning routine.
+    label : str | None, optional
+        Optional descriptive label for the plan.
+    add_simplify : bool, optional
+        Whether to append a simplification action after the targeted prune
+        attempts.
+    simplify_kwargs : dict[str, Any] | None, optional
+        Keyword arguments for the simplification action.
+
+    Returns
+    -------
+    OuterStepPlan
+        Plan that performs targeted prune attempts in internal-acceptance mode.
+
+    Raises
+    ------
+    ValueError
+        If there are no tracked two-qubit gates, if the targeting function
+        returns no gates, if it returns invalid indices/pairs, or if
+        `max_num_2q_gates` is not positive.
+    """
+    if max_num_2q_gates <= 0:
+        raise ValueError("`max_num_2q_gates` must be positive if provided.")
+
+    current_two_q_map = dict(experiment._2qbg_positions)
+
+    if not current_two_q_map:
+        raise ValueError("No tracked two-qubit gates are available for pruning.")
+
+    if targeting_function is None:
+        targeted_map = select_most_frequent_pair_gates(experiment)
+    else:
+        targeted_map = dict(targeting_function(experiment))
+
+    if not targeted_map:
+        raise ValueError("The targeting function selected no two-qubit gates.")
+
+    # Validate that the returned map is a subset of the currently tracked gates.
+    for circ_ind, pair in targeted_map.items():
+        if circ_ind not in current_two_q_map:
+            raise ValueError(
+                f"Targeted circuit index {circ_ind} is not a tracked two-qubit gate."
+            )
+        if current_two_q_map[circ_ind] != pair:
+            raise ValueError(
+                f"Targeted pair mismatch at circuit index {circ_ind}: "
+                f"expected {current_two_q_map[circ_ind]}, got {pair}."
+            )
+
+    selected_indices = sorted(targeted_map.keys())
+
+    if max_num_2q_gates is not None:
+        selected_indices = selected_indices[:max_num_2q_gates]
+
+    actions: list[ActionSpec] = []
+
+    for circ_ind in selected_indices:
+        occurrence, pair = experiment._get_pair_occurrence_from_circuit_index(circ_ind)
+
+        actions.append(
+            ActionSpec(
+                action=PRUNE_TWO_QUBIT,
+                kwargs={
+                    "target_occurrence": occurrence,
+                    "target_pair": pair,
+                    "temperature": temperature,
+                    "alpha": alpha,
+                    "accept_tol": accept_tol,
+                },
+                label=f"targeted_prune_{pair}_{occurrence}",
+            )
+        )
+
+    if add_simplify:
+        actions.append(
+            ActionSpec(
+                action=SIMPLIFY,
+                kwargs={} if simplify_kwargs is None else dict(simplify_kwargs),
+                label="simplify_after_targeted_prune",
+            )
+        )
+
+    return OuterStepPlan(
+        name="targeted_prune",
         actions=actions,
         acceptance_mode="internal",
         label=label,
