@@ -198,31 +198,6 @@ def select_most_frequent_pair_gates(
     experiment: MutableAnsatzExperiment,
 ) -> TwoQMap:
     """
-    Return all currently tracked two-qubit gates belonging to the most
-    frequently occurring ordered pair.
-
-    If several pairs are tied, one of them is selected uniformly at random.
-    """
-    two_q_map = dict(experiment._2qbg_positions)
-
-    if not two_q_map:
-        return {}
-
-    counts = pair_counts(two_q_map)
-    max_count = max(counts.values())
-    most_frequent_pairs = [pair for pair, count in counts.items() if count == max_count]
-    chosen_pair = random.choice(most_frequent_pairs)
-
-    return {
-        circ_ind: pair
-        for circ_ind, pair in two_q_map.items()
-        if pair == chosen_pair
-    }
-
-def select_most_frequent_pair_gates(
-    experiment: MutableAnsatzExperiment,
-) -> TwoQMap:
-    """
     Select all tracked two-qubit gates belonging to the most frequently
     occurring ordered pair.
 
