@@ -1,64 +1,54 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
 from dataclasses import dataclass
 from collections.abc import Sequence
 
 import numpy as np
 
-if TYPE_CHECKING:
-    from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
+from qadaptive.outer.outer_loop import OuterStepResult
+from qadaptive.training.history import TrainingRunRecord
+
 
 @dataclass
 class TrainingRunTrace:
     """
-    Container for a single inner-loop training segment within an outer-loop run.
+    Plot-ready representation of one inner-loop training run.
 
-    This structure represents the data produced during one training phase
-    (i.e., between two structural modifications of the ansatz). It provides
-    a consistent interface for plotting and analysis across multiple outer steps.
-    
+    This structure stores dense arrays aligned to a global plotting axis.
+    It is built from a `TrainingRunRecord` and optional outer-loop metadata.
+
     Attributes
     ----------
     run_index : int
         Sequential index of the training run (0-based).
     outer_iteration : int
-        Index of the outer-loop iteration associated with this training segment.
+        Index of the associated outer-loop iteration.
     action : str
-        Description of the structural modification applied before this training
-        segment (e.g., "uniform_growth", "prune_sweep").
+        Label describing the structural modification associated with the run.
     accepted : bool
-        Whether the structural modification associated with this segment was
-        accepted according to the outer-loop acceptance criterion.
+        Whether the associated outer-loop proposal was accepted.
     start : int
-        Global index (inclusive) of the first inner-loop iteration in this segment.
+        Global plotting index (inclusive) of the first point in this run.
     stop : int
-        Global index (exclusive) of the last inner-loop iteration in this segment.
+        Global plotting index (exclusive) of the last point in this run.
     param_names : list[str]
-        List of parameter names active during this training segment.
-        The order matches the columns of `params`.
+        Ordered parameter names corresponding to the columns of `params`.
     params : np.ndarray
-        Parameter values recorded during the training segment, with shape
-        ``(num_iterations, num_parameters)``.
+        Parameter values for the run, with shape ``(num_points, num_parameters)``.
+        If `include_initial=True` in the builder, the first row is the initial point.
     values : np.ndarray
-        Objective values recorded during the training segment, with shape
-        ``(num_iterations,)``.
+        Objective values for the run, with shape ``(num_points,)``.
+        If `include_initial=True`, the first entry is the initial objective value
+        or `missing_initial_value` if it was not stored.
     stepsizes : np.ndarray
-        Step sizes recorded during the training segment, with shape
-        ``(num_iterations,)``.
+        Step sizes for the run, with shape ``(num_points,)``.
+        If `include_initial=True`, the first entry is `np.nan`.
     cost_after : float | None, optional
-        Final objective value associated with this segment, typically taken
-        from the corresponding outer-step result.
+        Final objective value associated with the run.
     note : str | None, optional
-        Optional note associated with the segment, for example information
-        about automatic acceptance or rollback.
-
-    Notes
-    -----
-    This object is intended as the canonical intermediate representation for
-    plotting utilities. Plotting functions should consume `TrainingRunTrace`
-    objects rather than raw callback lists whenever possible.
+        Optional annotation for the run.
     """
+
     run_index: int
     outer_iteration: int
     action: str
@@ -73,231 +63,251 @@ class TrainingRunTrace:
     note: str | None = None
 
 
-def _deduplicate_initial_training_record(parameter_memory_history: Sequence) -> list:
+def _iteration_param_matrix(record: TrainingRunRecord) -> np.ndarray:
     """
-    Remove duplicated initial-training records from parameter-memory history.
+    Return the recorded iteration parameter vectors as a dense matrix.
 
     Parameters
     ----------
-    parameter_memory_history : Sequence
-        Sequence of parameter-memory history records, typically
-        `experiment.parameter_memory_history`.
+    record : TrainingRunRecord
+        Training-run record from which to extract iteration parameters.
 
     Returns
     -------
-    list
-        Cleaned list of records in which the duplicated
-        ``"Initial training before first plan"`` entry, if present, appears
-        only once.
-
-    Notes
-    -----
-    Some experiment versions may append the initial-training parameter-memory
-    record twice. This helper removes the second occurrence so that the number
-    of parameter-memory records matches the number of reconstructed training
-    segments.
-    """
-    cleaned = []
-    seen_initial = False
-
-    for record in parameter_memory_history:
-        is_initial = (
-            getattr(record, "outer_iteration", None) == 0
-            and getattr(record, "action", None) == "Initial training before first plan"
-        )
-
-        if is_initial and seen_initial:
-            continue
-
-        cleaned.append(record)
-
-        if is_initial:
-            seen_initial = True
-
-    return cleaned
-
-
-def _validate_trace_inputs(
-    outer_step_history: Sequence,
-    parameter_memory_history: Sequence,
-    params_history: Sequence[Sequence[float]] | Sequence[np.ndarray],
-    values_history: Sequence[float],
-    stepsize_history: Sequence[float],
-    train_iterations: int,
-) -> None:
-    """
-    Validate raw inputs used to reconstruct training traces.
-
-    Parameters
-    ----------
-    outer_step_history : Sequence
-        Sequence of outer-step result records.
-    parameter_memory_history : Sequence
-        Sequence of parameter-memory history records.
-    params_history : Sequence[Sequence[float]] or Sequence[np.ndarray]
-        Flat callback history of parameter vectors across all inner-loop runs.
-    values_history : Sequence[float]
-        Flat callback history of objective values across all inner-loop runs.
-    stepsize_history : Sequence[float]
-        Flat callback history of step sizes across all inner-loop runs.
-    train_iterations : int
-        Number of inner-loop iterations expected per training run.
+    np.ndarray
+        Array of shape ``(num_iterations, num_parameters)``.
 
     Raises
     ------
     ValueError
-        If the input histories are inconsistent in length or shape.
+        If an iteration parameter vector does not match the recorded parameter count.
     """
-    if train_iterations <= 0:
-        raise ValueError("`train_iterations` must be positive.")
+    num_params = len(record.param_names)
 
-    if len(outer_step_history) != len(parameter_memory_history):
-        raise ValueError(
-            f"Mismatch between outer_step_history ({len(outer_step_history)}) "
-            f"and parameter_memory_history ({len(parameter_memory_history)})."
-        )
+    if len(record.iterations) == 0:
+        return np.empty((0, num_params), dtype=float)
 
-    expected_points = len(outer_step_history) * train_iterations
+    rows = []
+    for iteration in record.iterations:
+        row = np.asarray(iteration.params, dtype=float)
+        if row.shape != (num_params,):
+            raise ValueError(
+                f"Iteration parameter vector has shape {row.shape}, "
+                f"expected ({num_params},)."
+            )
+        rows.append(row)
 
-    if len(params_history) != len(values_history) or len(values_history) != len(stepsize_history):
-        raise ValueError(
-            "Callback histories must have the same length for parameters, "
-            "objective values, and step sizes."
-        )
-
-    if len(params_history) < expected_points:
-        raise ValueError(
-            f"Callback history is too short: got {len(params_history)} entries, "
-            f"expected at least {expected_points} from "
-            f"{len(outer_step_history)} runs and {train_iterations} iterations per run."
-        )
+    return np.vstack(rows)
 
 
-def build_training_run_traces(
-    experiment: "MutableAnsatzExperiment",
-    params_history: Sequence[Sequence[float]] | Sequence[np.ndarray],
-    values_history: Sequence[float],
-    stepsize_history: Sequence[float],
-    train_iterations: int,
-    deduplicate_initial_record: bool = True,
-) -> list[TrainingRunTrace]:
+def _iteration_value_vector(record: TrainingRunRecord) -> np.ndarray:
     """
-    Reconstruct structured training traces from flat callback histories.
-
-    This function converts the raw histories accumulated by a live callback
-    into a list of `TrainingRunTrace` objects, one for each inner-loop
-    training segment in the experiment. Each segment is associated with the
-    corresponding outer-step metadata and parameter names active during that
-    run.
+    Return the recorded per-iteration objective values as a vector.
 
     Parameters
     ----------
-    experiment : MutableAnsatzExperiment
-        Experiment object containing `outer_step_history` and
-        `parameter_memory_history`.
-    params_history : Sequence[Sequence[float]] or Sequence[np.ndarray]
-        Flat callback history of parameter vectors across all inner-loop runs.
-        Each entry corresponds to one recorded optimizer step.
-    values_history : Sequence[float]
-        Flat callback history of objective values across all inner-loop runs.
-    stepsize_history : Sequence[float]
-        Flat callback history of step sizes across all inner-loop runs.
-    train_iterations : int
-        Number of inner-loop iterations per training run. This is used to slice
-        the flat callback histories into per-run segments.
-    deduplicate_initial_record : bool, optional
-        Whether to remove a duplicated initial-training parameter-memory record
-        before reconstruction. Default is True.
+    record : TrainingRunRecord
+        Training-run record from which to extract objective values.
+
+    Returns
+    -------
+    np.ndarray
+        Objective values with shape ``(num_iterations,)``.
+    """
+    return np.asarray([float(iteration.value) for iteration in record.iterations], dtype=float)
+
+
+def _iteration_stepsize_vector(record: TrainingRunRecord) -> np.ndarray:
+    """
+    Return the recorded per-iteration step sizes as a vector.
+
+    Parameters
+    ----------
+    record : TrainingRunRecord
+        Training-run record from which to extract step sizes.
+
+    Returns
+    -------
+    np.ndarray
+        Step sizes with shape ``(num_iterations,)``.
+    """
+    return np.asarray([float(iteration.stepsize) for iteration in record.iterations], dtype=float)
+
+
+def _resolve_outer_metadata(
+    record: TrainingRunRecord,
+    run_index: int,
+    outer_step_history: Sequence[OuterStepResult] | None,
+) -> tuple[int, str, bool, float | None, str | None]:
+    """
+    Resolve outer-loop metadata for one training run.
+
+    Parameters
+    ----------
+    record : TrainingRunRecord
+        Training-run record.
+    run_index : int
+        Index of the training run.
+    outer_step_history : Sequence[OuterStepResult] | None
+        Optional outer-loop history aligned with the training runs.
+
+    Returns
+    -------
+    tuple[int, str, bool, float | None, str | None]
+        Tuple ``(outer_iteration, action, accepted, cost_after, note)``.
+    """
+    if outer_step_history is not None:
+        outer_result = outer_step_history[run_index]
+        return (
+            int(outer_result.iteration),
+            str(outer_result.action),
+            bool(outer_result.accepted),
+            None if outer_result.cost_after is None else float(outer_result.cost_after),
+            outer_result.note,
+        )
+
+    outer_iteration = getattr(record, "outer_iteration", run_index)
+    action = getattr(record, "action", None)
+    accepted = getattr(record, "accepted_outer_step", True)
+    note = getattr(record, "note", None)
+    cost_after = getattr(record, "final_value", None)
+
+    if action is None:
+        action = f"run_{run_index}"
+
+    if accepted is None:
+        accepted = True
+
+    return (
+        int(outer_iteration),
+        str(action),
+        bool(accepted),
+        None if cost_after is None else float(cost_after),
+        note,
+    )
+
+
+def build_training_run_traces(
+    records: Sequence[TrainingRunRecord],
+    outer_step_history: Sequence[OuterStepResult] | None = None,
+    include_initial: bool = True,
+    missing_initial_value: float = np.nan,
+) -> list[TrainingRunTrace]:
+    """
+    Build plotting traces from stored training-run records.
+
+    Parameters
+    ----------
+    records : Sequence[TrainingRunRecord]
+        Stored training-run records, typically from
+        `MutableAnsatzExperiment.training_run_history`.
+    outer_step_history : Sequence[OuterStepResult] | None, optional
+        Optional outer-step metadata aligned with `records`. If provided, it
+        must have the same length as `records`.
+    include_initial : bool, optional
+        If True, prepend each run's initial point to the plotted trace.
+        The first plotted x-position of the first run is then 0.
+        If False, only recorded optimizer iterations are plotted, and the first
+        plotted x-position of the first run is 1.
+    missing_initial_value : float, optional
+        Placeholder value used when `include_initial=True` but a run has no stored
+        initial objective value. Defaults to `np.nan`.
 
     Returns
     -------
     list[TrainingRunTrace]
-        Ordered list of reconstructed training segments.
+        Ordered list of plot-ready training traces.
 
     Raises
     ------
     ValueError
-        If the callback histories are inconsistent with the number of outer
-        steps, with `train_iterations`, or with the recorded parameter names.
+        If `outer_step_history` length does not match `records`, if initial
+        points have incompatible sizes, or if a run would contain no plotted points.
 
     Notes
     -----
-    The reconstruction assumes that:
-    - the ansatz structure is fixed during each inner-loop training run,
-    - parameter order within a run is the order stored in the corresponding
-      parameter-memory record,
-    - callback histories are concatenated in chronological order across runs.
-
-    The returned traces are intended to serve as the main input to plotting
-    utilities such as:
-    - `plot_cost_with_outer_boundaries`
-    - `plot_parameter_lifelines`
-    - `plot_parameter_heatmap`
+    This builder creates a global plotting axis by concatenating training runs.
+    If `include_initial=True`, each run occupies one additional x-position for
+    its initial point.
     """
-    outer_step_history = list(experiment.outer_step_history)
-    parameter_memory_history = list(experiment.parameter_memory_history)
+    records = list(records)
 
-    if deduplicate_initial_record:
-        parameter_memory_history = _deduplicate_initial_training_record(
-            parameter_memory_history
+    if len(records) == 0:
+        return []
+
+    if outer_step_history is not None and len(outer_step_history) != len(records):
+        raise ValueError(
+            f"Got {len(outer_step_history)} outer-step records for {len(records)} training runs."
         )
 
-    _validate_trace_inputs(
-        outer_step_history=outer_step_history,
-        parameter_memory_history=parameter_memory_history,
-        params_history=params_history,
-        values_history=values_history,
-        stepsize_history=stepsize_history,
-        train_iterations=train_iterations,
-    )
-
     traces: list[TrainingRunTrace] = []
+    cursor = 0 if include_initial else 1
 
-    for run_index, (outer_result, memory_record) in enumerate(
-        zip(outer_step_history, parameter_memory_history)
-    ):
-        start = run_index * train_iterations
-        stop = start + train_iterations
+    for run_index, record in enumerate(records):
+        param_names = list(record.param_names)
+        num_params = len(param_names)
 
-        param_names = list(memory_record.values.parameter_names)
-        param_matrix = np.asarray(params_history[start:stop], dtype=float)
-        value_vector = np.asarray(values_history[start:stop], dtype=float)
-        stepsize_vector = np.asarray(stepsize_history[start:stop], dtype=float)
-
-        if param_matrix.ndim != 2:
+        initial_point = np.asarray(record.initial_point, dtype=float)
+        if initial_point.shape != (num_params,):
             raise ValueError(
-                f"Run {run_index} parameter history must be a 2D array, "
-                f"got shape {param_matrix.shape}."
+                f"Run {run_index} initial point has shape {initial_point.shape}, "
+                f"expected ({num_params},)."
             )
 
-        if param_matrix.shape[0] != train_iterations:
+        iter_params = _iteration_param_matrix(record)
+        iter_values = _iteration_value_vector(record)
+        iter_stepsizes = _iteration_stepsize_vector(record)
+
+        if include_initial:
+            if num_params == 0:
+                params = np.empty((1 + len(record.iterations), 0), dtype=float)
+            else:
+                params = np.vstack([initial_point.reshape(1, -1), iter_params])
+
+            initial_value = (
+                float(record.initial_value)
+                if record.initial_value is not None
+                else float(missing_initial_value)
+            )
+            values = np.concatenate(([initial_value], iter_values))
+            stepsizes = np.concatenate(([np.nan], iter_stepsizes))
+        else:
+            params = iter_params
+            values = iter_values
+            stepsizes = iter_stepsizes
+
+        if values.size == 0:
             raise ValueError(
-                f"Run {run_index} contains {param_matrix.shape[0]} recorded iterations, "
-                f"expected {train_iterations}."
+                f"Run {run_index} has no plotted points. "
+                "Use include_initial=True or record at least one accepted iteration."
             )
 
-        if param_matrix.shape[1] != len(param_names):
-            raise ValueError(
-                f"Run {run_index} has {param_matrix.shape[1]} parameter columns in the "
-                f"callback history, but {len(param_names)} parameter names were recorded "
-                "in parameter_memory_history."
-            )
+        start = cursor
+        stop = start + len(values)
+
+        outer_iteration, action, accepted, cost_after, note = _resolve_outer_metadata(
+            record=record,
+            run_index=run_index,
+            outer_step_history=outer_step_history,
+        )
 
         traces.append(
             TrainingRunTrace(
                 run_index=run_index,
-                outer_iteration=outer_result.iteration,
-                action=outer_result.action,
-                accepted=outer_result.accepted,
+                outer_iteration=outer_iteration,
+                action=action,
+                accepted=accepted,
                 start=start,
                 stop=stop,
                 param_names=param_names,
-                params=param_matrix,
-                values=value_vector,
-                stepsizes=stepsize_vector,
-                cost_after=outer_result.cost_after,
-                note=outer_result.note,
+                params=params,
+                values=values,
+                stepsizes=stepsizes,
+                cost_after=cost_after,
+                note=note,
             )
         )
+
+        cursor = stop
 
     return traces

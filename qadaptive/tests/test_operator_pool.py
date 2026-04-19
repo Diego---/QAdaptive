@@ -31,7 +31,7 @@ def test_pool_block_build_validates_parameter_count():
 
 
 def test_default_block_pool_contains_expected_blocks():
-    assert set(DEFAULT_BLOCK_POOL) == {"rz_rx_rz", "cx_identity", "cz_identity"}
+    assert set(DEFAULT_BLOCK_POOL) == {"rz_rx_rz", "cx_identity", "cz_identity", "single_cx_block", "single_cz_block"}
 
 
 
@@ -44,19 +44,20 @@ def test_cx_identity_block_metadata_and_structure_are_consistent():
     assert block.num_parameters == 4
     assert qc.num_qubits == 2
     assert qc.num_parameters == 4
-    assert operation_names(qc) == ["cx", "rz", "rx", "rz", "rx", "cx"]
+    assert operation_names(qc) == ['ry', 'rz', 'cx', 'ry', 'rz', 'cx']
 
 
 
 def test_default_blocks_are_identity_at_zero():
     for block in DEFAULT_BLOCK_POOL:
-        block_obj = DEFAULT_BLOCK_POOL[block]
-        num_qubits = block_obj.num_qubits
-        params = ParameterVector("t", block_obj.num_parameters)
-        qc = block_obj.build(list(params))
-        bound = qc.assign_parameters({p: 0.0 for p in qc.parameters})
+        if block != "single_cx_block" and block != "single_cz_block":
+            block_obj = DEFAULT_BLOCK_POOL[block]
+            num_qubits = block_obj.num_qubits
+            params = ParameterVector("t", block_obj.num_parameters)
+            qc = block_obj.build(list(params))
+            bound = qc.assign_parameters({p: 0.0 for p in qc.parameters})
 
-        assert Operator(bound).equiv(Operator(QuantumCircuit(num_qubits)))
+            assert Operator(bound).equiv(Operator(QuantumCircuit(num_qubits)))
 
 
 
@@ -65,4 +66,4 @@ def test_cz_identity_block_structure_matches_documented_pattern():
     params = ParameterVector("t", block.num_parameters)
     qc = block.build(list(params))
 
-    assert operation_names(qc) == ["cz", "ry", "rx", "cz", "ry", "rx"]
+    assert operation_names(qc) == ['rx', 'ry', 'cz', 'rx', 'ry', 'cz']

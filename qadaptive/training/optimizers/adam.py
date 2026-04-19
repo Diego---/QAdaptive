@@ -30,7 +30,7 @@ from qiskit_algorithms.optimizers.optimizer import (
     POINT,
 )
 
-from ..stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
+from .stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
 
 logger = logging.getLogger(__name__)
 

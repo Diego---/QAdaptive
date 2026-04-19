@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 import re
 from collections import defaultdict
@@ -7,11 +8,26 @@ import numpy as np
 
 from qadaptive.utils.plotting.traces import TrainingRunTrace
 
-def _parameter_sort_key(name: str):
+
+def _parameter_sort_key(name: str) -> tuple[int, int | str]:
+    """
+    Return a sort key that keeps parameters named like ``θ_i`` in numeric order.
+
+    Parameters
+    ----------
+    name : str
+        Parameter name.
+
+    Returns
+    -------
+    tuple[int, int | str]
+        Sort key for consistent parameter ordering.
+    """
     match = re.match(r"^θ_(\d+)$", name)
     if match is None:
         return (1, name)
     return (0, int(match.group(1)))
+
 
 def _normalize_parameter_matrix_rows(matrix: np.ndarray) -> np.ndarray:
     """
@@ -53,35 +69,23 @@ def build_parameter_series(
     traces: list[TrainingRunTrace],
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """
-    Construct continuous parameter trajectories across multiple training segments.
-
-    This function aggregates parameter values from a sequence of
-    `TrainingRunTrace` objects into time series indexed by global iteration.
-    Parameters that are absent in certain segments (due to pruning or late
-    insertion) are represented with gaps in their trajectories.
+    Construct continuous parameter trajectories across multiple training runs.
 
     Parameters
     ----------
     traces : list[TrainingRunTrace]
-        Sequence of training segments containing parameter dictionaries
-        at each iteration.
+        Sequence of plot-ready training traces.
 
     Returns
     -------
-    series : dict[str, tuple[np.ndarray, np.ndarray]]
-        Mapping from parameter name to a tuple (x, y), where:
-        - x : np.ndarray
-            Global iteration indices at which the parameter is defined.
-        - y : np.ndarray
-            Corresponding parameter values.
+    dict[str, tuple[np.ndarray, np.ndarray]]
+        Mapping from parameter name to a tuple ``(x, y)``, where `x` contains
+        global plotting indices and `y` contains parameter values.
 
     Notes
     -----
-    - Parameters may appear or disappear across traces due to structural
-      modifications of the ansatz.
-    - This function does not interpolate missing values; gaps are preserved.
-    - Parameter identity is determined by name, typically from a
-      `ParameterVector` or parameter memory mapping.
+    A `NaN` separator is inserted after each run so that parameters which
+    disappear and later reappear are shown as disconnected line segments.
     """
     xs: dict[str, list[float]] = defaultdict(list)
     ys: dict[str, list[float]] = defaultdict(list)
@@ -93,7 +97,6 @@ def build_parameter_series(
             xs[name].extend(x.tolist())
             ys[name].extend(trace.params[:, col].tolist())
 
-            # break the line after the run so disappear/reappear is visible
             xs[name].append(np.nan)
             ys[name].append(np.nan)
 
@@ -109,43 +112,34 @@ def plot_parameter_lifelines(
     figsize: tuple[int, int] = (12, 6),
     linewidth: float = 1.5,
     legend_outside: bool = True,
+    show_legend: bool = True,
 ) -> tuple[plt.Figure, plt.Axes]:
     """
-    Plot the evolution of named parameters across inner-loop iterations.
-
-    Each parameter is displayed as a separate trajectory over the global
-    iteration axis. The plot highlights how parameters evolve, persist,
-    or disappear as the ansatz is modified during the outer loop.
+    Plot the evolution of named parameters across global plotting indices.
 
     Parameters
     ----------
     traces : list[TrainingRunTrace]
-        Sequence of training segments containing parameter histories.
+        Sequence of plot-ready training traces.
     parameters : list[str] or None, optional
         Subset of parameter names to plot. If None, all parameters are shown.
     figsize : tuple[int, int], optional
-        Size of the matplotlib figure. Default is (12, 6).
+        Figure size. Default is ``(12, 6)``.
     linewidth : float, optional
-        Line width for parameter trajectories. Default is 1.5.
+        Line width for parameter trajectories. Default is ``1.5``.
     legend_outside : bool, optional
-        If True, place the legend outside the plotting area to reduce clutter.
-        Default is True.
+        If True, place the legend outside the plotting area. Default is True.
+    show_legend: bool, optional
+        Whether to show legend.
 
     Returns
     -------
-    fig : matplotlib.figure.Figure
-        The created matplotlib figure.
-    ax : matplotlib.axes.Axes
-        The axes containing the plot.
-
-    Notes
-    -----
-    - Vertical dashed lines indicate boundaries between outer-loop segments.
-    - Shaded regions represent accepted (green) or rejected (red) structural updates.
-    - Parameters that are pruned or newly introduced will show discontinuities.
-    - For large parameter counts, the legend may become dense; consider
-      filtering `parameters` or grouping them.
+    tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]
+        Created figure and axes.
     """
+    if len(traces) == 0:
+        raise ValueError("`traces` must contain at least one TrainingRunTrace.")
+
     series = build_parameter_series(traces)
 
     if parameters is None:
@@ -164,23 +158,24 @@ def plot_parameter_lifelines(
 
     for trace in traces:
         shade_color = "green" if trace.accepted else "red"
-        ax.axvspan(trace.start, trace.stop, alpha=0.04, color=shade_color)
+        ax.axvspan(trace.start - 0.5, trace.stop - 0.5, alpha=0.04, color=shade_color)
 
     ax.set_xlabel("Global inner-loop iteration")
     ax.set_ylabel("Parameter value")
     ax.set_title("Named parameter trajectories")
 
-    if legend_outside:
-        ax.legend(
-            loc="upper left",
-            bbox_to_anchor=(1.02, 1.0),
-            borderaxespad=0.0,
-            fontsize=8,
-            ncol=1,
-        )
-        fig.subplots_adjust(right=0.72)
-    else:
-        ax.legend(ncol=2, fontsize=8)
+    if show_legend:
+        if legend_outside:
+            ax.legend(
+                loc="upper left",
+                bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0,
+                fontsize=8,
+                ncol=1,
+            )
+            fig.subplots_adjust(right=0.72)
+        else:
+            ax.legend(ncol=2, fontsize=8)
 
     return fig, ax
 
@@ -193,50 +188,35 @@ def plot_parameter_heatmap(
     normalize: bool = False,
 ) -> tuple[plt.Figure, plt.Axes]:
     """
-    Visualize parameter evolution as a heatmap over global iterations.
-
-    This plot provides a compact representation of parameter dynamics,
-    where each row corresponds to a parameter and each column to an
-    inner-loop iteration. Color encodes the parameter value.
+    Visualize parameter evolution as a heatmap over global plotting indices.
 
     Parameters
     ----------
     traces : list[TrainingRunTrace]
-        Sequence of training segments containing parameter histories.
+        Sequence of plot-ready training traces.
     parameters : list[str] or None, optional
         Subset of parameter names to include. If None, all parameters are used.
     figsize : tuple[int, int], optional
-        Size of the matplotlib figure. Default is (12, 6).
+        Figure size. Default is ``(12, 6)``.
     cmap : str, optional
-        Matplotlib colormap used to encode parameter values.
-        Default is "viridis".
+        Matplotlib colormap used for the heatmap. Default is ``"viridis"``.
     normalize : bool, optional
-        If True, normalize each parameter independently (e.g., to zero mean
-        and unit variance) before plotting. Default is False.
+        If True, normalize each parameter row independently before plotting.
+        Default is False.
 
     Returns
     -------
-    fig : matplotlib.figure.Figure
-        The created matplotlib figure.
-    ax : matplotlib.axes.Axes
-        The axes containing the heatmap.
-
-    Notes
-    -----
-    - Missing parameter values (due to pruning or late insertion) are
-      typically represented as NaNs and may appear as blank or masked regions.
-    - This visualization is particularly useful for identifying:
-        * inactive parameters,
-        * sudden changes due to structural updates,
-        * correlated parameter behavior.
-    - For large parameter sets, consider sorting or clustering parameters
-      to improve interpretability.
+    tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]
+        Created figure and axes.
     """
+    if len(traces) == 0:
+        raise ValueError("`traces` must contain at least one TrainingRunTrace.")
+
     all_names = sorted(
         {name for trace in traces for name in trace.param_names},
         key=_parameter_sort_key,
     )
-    
+
     if parameters is None:
         selected_names = all_names
     else:
@@ -247,8 +227,8 @@ def plot_parameter_heatmap(
         raise ValueError("No parameter names were selected for the heatmap.")
 
     total_steps = traces[-1].stop
-    matrix = np.full((len(all_names), total_steps), np.nan, dtype=float)
-    name_to_row = {name: i for i, name in enumerate(all_names)}
+    matrix = np.full((len(selected_names), total_steps), np.nan, dtype=float)
+    name_to_row = {name: i for i, name in enumerate(selected_names)}
 
     for trace in traces:
         for col, name in enumerate(trace.param_names):

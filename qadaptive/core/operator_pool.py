@@ -51,7 +51,6 @@ class PoolBlock:
             )
         return self.builder(params)
 
-
 def _build_rz_rx_rz(params: list[Parameter]) -> QuantumCircuit:
     """
     One-qubit Euler block.
@@ -65,27 +64,26 @@ def _build_rz_rx_rz(params: list[Parameter]) -> QuantumCircuit:
     qc.rz(params[2], 0)
     return qc
 
-
 def _build_cx_identity(params: list[Parameter]) -> QuantumCircuit:
     """
     Two-qubit identity-initializable block.
 
     The block is
-        CX(0, 1)
+        RY(a) on q0
         RZ(b) on q0
-        RX(c) on q0
         CX(0, 1)
+        RY(c) on q1
         RZ(d) on q1
-        RX(e) on q1
-
+        CX(0, 1)
+        
     For all parameters initialized to zero, the block is exactly identity.
     """
     qc = QuantumCircuit(2, name="cx_identity")
+    qc.ry(params[0], 0)
+    qc.rz(params[1], 0)
     qc.cx(0, 1)
-    qc.rz(params[0], 0)
-    qc.rx(params[1], 0)
-    qc.rz(params[2], 1)
-    qc.rx(params[3], 1)
+    qc.ry(params[2], 1)
+    qc.rz(params[3], 1)
     qc.cx(0, 1)
     return qc
 
@@ -94,17 +92,93 @@ def _build_cz_identity(params: list[Parameter]) -> QuantumCircuit:
     Two-qubit identity-initializable block.
 
     The block is
+        RX(a) on q0
+        RY(b) on q0
         CZ(0, 1)
+        RX(c) on q1
+        RY(d) on q1
+        CZ(0, 1)
+
+    For all parameters initialized to zero, the block is exactly identity.
+    """
+    qc = QuantumCircuit(2, name="cz_identity")
+    qc.rx(params[0], 0)
+    qc.ry(params[1], 0)
+    qc.cz(0, 1)
+    qc.rx(params[2], 1)
+    qc.ry(params[3], 1)
+    qc.cz(0, 1)
+    return qc
+
+def _build_single_rxx_block(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit identity-initializable block.
+
+    The block is
+        RZ(a) on q0
+        RXX(b) on (q0, q1)
+        RZ(c) on q1
+
+    For all parameters initialized to zero, the is the identity.
+    """
+    qc = QuantumCircuit(2, name="single_cx_block")
+    qc.rz(params[0], 0)
+    qc.rxx(params[1], 0, 1)
+    qc.rz(params[2], 1)
+    return qc
+
+def _build_single_rzz_block(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit identity-initializable block.
+
+    The block is
+        RX(a) on q0
+        RZZ(b) on (q0, q1)
+        RX(c) on q1
+
+    For all parameters initialized to zero, the block is the identity.
+    """
+    qc = QuantumCircuit(2, name="single_cz_block")
+    qc.rx(params[0], 0)
+    qc.rzz(params[1], 0, 1)
+    qc.rx(params[2], 1)
+    return qc
+
+def _build_single_cx_block(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit non-identity-initializable block.
+
+    The block is
+        RZ(b) on q0
+        RX(c) on q0
+        CX(0, 1)
+        RZ(d) on q1
+        RX(e) on q1
+
+    For all parameters initialized to zero, the block is a CX.
+    """
+    qc = QuantumCircuit(2, name="single_cx_block")
+    qc.rz(params[0], 0)
+    qc.ry(params[1], 0)
+    qc.cx(0, 1)
+    qc.rz(params[2], 1)
+    qc.ry(params[3], 1)
+    return qc
+
+def _build_single_cz_block(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit non-identity-initializable block.
+
+    The block is
         RY(b) on q0
         RX(c) on q0
         CZ(0, 1)
         RY(d) on q1
         RX(e) on q1
 
-    For all parameters initialized to zero, the block is exactly identity.
+    For all parameters initialized to zero, the block is a CZ.
     """
-    qc = QuantumCircuit(2, name="cz_identity")
-    qc.cz(0, 1)
+    qc = QuantumCircuit(2, name="single_cz_block")
     qc.ry(params[0], 0)
     qc.rx(params[1], 0)
     qc.cz(0, 1)
@@ -131,5 +205,29 @@ DEFAULT_BLOCK_POOL: dict[str, PoolBlock] = {
         num_qubits=2,
         num_parameters=4,
         builder=_build_cz_identity
+    ),
+    "single_cx_block": PoolBlock(
+        name="single_cx_block",
+        num_qubits=2,
+        num_parameters=4,
+        builder=_build_single_cx_block,
+    ),
+    "single_cz_block": PoolBlock(
+        name="single_cz_block",
+        num_qubits=2,
+        num_parameters=4,
+        builder=_build_single_cz_block,
+    ),
+    "single_rxx_block": PoolBlock(
+        name="single_rxx_block",
+        num_qubits=2,
+        num_parameters=3,
+        builder=_build_single_rxx_block,
+    ),
+    "single_rzz_block": PoolBlock(
+        name="single_rzz_block",
+        num_qubits=2,
+        num_parameters=3,
+        builder=_build_single_rzz_block,
     ),
 }

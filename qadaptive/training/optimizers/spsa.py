@@ -19,7 +19,7 @@ from qiskit_algorithms.optimizers.optimizer import (
 )
 from qiskit_algorithms.utils import algorithm_globals
 
-from ..stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
+from .stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
 
 logger = logging.getLogger(__name__)
 
@@ -284,8 +284,8 @@ class SPSA(StepwiseOptimizer):
         def perturbation(n_start: int = 0) -> Iterator[float]:
             return powerseries(c, gamma, n_start=n_start)
 
-        self.learning_rate = learning_rate
-        self.perturbation = perturbation
+        self.set_learning_rate(learning_rate)
+        self.set_perturbation(perturbation)
         self._hyperparameters = {
             "a": a,
             "alpha": alpha,

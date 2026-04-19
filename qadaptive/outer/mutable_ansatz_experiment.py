@@ -41,7 +41,7 @@ from qadaptive.outer.outer_loop import (
     ActionSpec,
     OuterStepPlan
 )
-from qadaptive.utils.utils import create_callback_args
+from qadaptive.training.optimizers import create_callback_args
 
 CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
 TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
@@ -216,6 +216,15 @@ class MutableAnsatzExperiment:
 
         new_callback = callback_builder(**callback_args)
         self.reset_optimizer_callback(new_callback)
+        
+    def _reset_inner_loop_termination_checker(self) -> None:
+        """Reset the inner-loop termination checker for the next training run."""
+        try:
+            self.trainer.optimizer.termination_checker.reset()
+        except AttributeError:
+            logger.warning(
+                "Optimizer does not have a termination_checker with a reset method. Skipping termination checker reset."
+            )
 
     def get_latest_gradients(self) -> np.ndarray:
         """
@@ -751,6 +760,8 @@ class MutableAnsatzExperiment:
         iterations: int = 100,
         update_parameter_memory: bool = True,
         trainer_iteration_reset: int | None = None,
+        record_run_history: bool = False,
+        store_initial_value_in_history: bool = False,
         **kwargs
         ) -> OptimizerResult:
         """
@@ -769,19 +780,16 @@ class MutableAnsatzExperiment:
         update_parameter_memory : bool, optional
             If `True`, the parameter values at the end of this training run are stored
             in `parameter_memory` for potential reuse in future runs. Defaults to `True`.
-        reuse_parameter_memory : bool, optional
-            If `True` and `initial_point` is `None`, construct the starting vector
-            from `parameter_memory` using the current ansatz parameter names.
-        default_value_for_new_params : float, optional
-            Default value assigned to current parameters that are not yet present in
-            `parameter_memory` when warm-starting a run.
         trainer_iteration_reset : int | None, optional
-            If not None, the optimizer's iteration counter is reset to this value after training.
+            If not None, reset the optimizer iteration counter to this value before
+            training begins.
+        record_run_history : bool, optional
+            If True, ask the trainer to store a `TrainingRunRecord` for this run.
+        store_initial_value_in_history : bool, optional
+            If True and `record_run_history=True`, evaluate the loss at the initial
+            point and store it in the resulting training-run record.
         **kwargs
-            Additional configuration. Currently supports:
-            - `use_epochs`
-            - `num_circs_per_group`
-            - `num_circs_per_batch`
+            Additional configuration forwarded to the trainer and objective.
 
         Returns
         -------
@@ -790,13 +798,37 @@ class MutableAnsatzExperiment:
         """
         
         current_ansatz = self.adaptive_ansatz.get_current_ansatz()
+
+        if initial_point is None:
+            initial_point = [np.random.choice([-1.0, 1.0]) for _ in range(current_ansatz.num_parameters)]
+
+        initial_point_array = np.asarray(initial_point, dtype=float)
+
+        if len(initial_point_array) != current_ansatz.num_parameters:
+            raise ValueError(
+                f"Provided `initial_point` has length {len(initial_point_array)}, "
+                f"but the current ansatz has {current_ansatz.num_parameters} parameters."
+            )
+
+        initial_value = None
+        if record_run_history and store_initial_value_in_history:
+            objective_for_initial = loss_function if loss_next is None else loss_next
+            try:
+                initial_value = float(
+                    objective_for_initial(initial_point_array, ansatz=current_ansatz, **kwargs)
+                )
+            except TypeError:
+                initial_value = float(objective_for_initial(initial_point_array, current_ansatz))
+
         result = self.trainer.train_one_time(
             ansatz=current_ansatz,
             loss_function=loss_function,
-            initial_point=initial_point,
+            initial_point=initial_point_array,
             loss_next=loss_next,
             iterations=iterations,
             iteration_start=trainer_iteration_reset,
+            record_run_history=record_run_history,
+            initial_value=initial_value,
             **kwargs,
         )
         
@@ -835,6 +867,8 @@ class MutableAnsatzExperiment:
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
         record_parameter_memory: bool = True,
+        record_run_history: bool = False,
+        store_initial_value_in_history: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         **train_kwargs,
@@ -879,6 +913,12 @@ class MutableAnsatzExperiment:
             Default value for parameters not yet present in `parameter_memory`.
         record_parameter_memory : bool, optional
             Whether to append a parameter-memory record for this attempted step.
+        record_run_history : bool, optional
+            Whether to ask the trainer to store a `TrainingRunRecord` for the retraining phase
+            of this step.
+        store_initial_value_in_history : bool, optional
+            If True and `record_run_history=True`, evaluate the loss at the initial
+            point and store it in the resulting training-run record for the retraining phase.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -940,7 +980,7 @@ class MutableAnsatzExperiment:
                 train_iterations,
             )
             
-            if initial_point_generator is None and reuse_parameter_memory and self.parameter_memory:
+            if initial_point_generator is None and reuse_parameter_memory and num_parameters_before > 0:
                 logger.info(
                     "Reusing parameter memory to build initial point for training after plan '%s'.",
                     plan.display_name,
@@ -954,8 +994,18 @@ class MutableAnsatzExperiment:
                 )
             elif initial_point_generator is None:
                 initial_point = [np.random.choice([-1.0, 1.0]) for _ in range(self.ansatz.num_parameters)]
+                logger.info(
+                    "No initial point generator provided; using random point after plan '%s': %s.",
+                    plan.display_name,
+                    initial_point,
+                )
             else:
                 initial_point = initial_point_generator(self._outer_iteration)
+                logger.info(
+                    "Generated initial point for training after plan '%s': %s",
+                    plan.display_name,
+                    initial_point,
+                )
             
             train_result = self.train_one_time(
                 loss_function=loss_function,
@@ -964,6 +1014,8 @@ class MutableAnsatzExperiment:
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
                 trainer_iteration_reset=trainer_iteration_reset,
+                record_run_history=record_run_history,
+                store_initial_value_in_history=store_initial_value_in_history,
                 **train_kwargs,
             )
             cost_after = float(train_result.fun)
@@ -972,6 +1024,8 @@ class MutableAnsatzExperiment:
                 callback_builder,
                 **({} if callback_kwargs is None else callback_kwargs)
                 ) # Will only reset if callback_builder is not None
+            
+            self._reset_inner_loop_termination_checker()
         else:
             if plan.acceptance_mode == "outer":
                 raise ValueError(
@@ -1151,6 +1205,8 @@ class MutableAnsatzExperiment:
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
         record_parameter_memory: bool = True,
+        record_run_history: bool = False,
+        store_initial_value_in_history: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         stop_on_error: bool = True,
@@ -1207,6 +1263,12 @@ class MutableAnsatzExperiment:
             Default value assigned to newly introduced parameters when warm-starting.
         record_parameter_memory : bool, optional
             Whether to append parameter-memory records for each attempted outer step.
+        record_run_history : bool, optional
+            Whether to ask the trainer to store a `TrainingRunRecord` for each retraining phase
+            of the outer steps.
+        store_initial_value_in_history : bool, optional
+            If True and `record_run_history=True`, evaluate the loss at the initial point and
+            store it in the resulting training-run record for each retraining phase of the outer steps.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -1272,6 +1334,8 @@ class MutableAnsatzExperiment:
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
                 trainer_iteration_reset=trainer_iteration_reset,
+                record_run_history=record_run_history,
+                store_initial_value_in_history=store_initial_value_in_history,
                 **train_kwargs,
             )
                             
@@ -1354,6 +1418,8 @@ class MutableAnsatzExperiment:
                     reuse_parameter_memory=reuse_parameter_memory,
                     default_value_for_new_params=default_value_for_new_params,
                     record_parameter_memory=record_parameter_memory,
+                    record_run_history=record_run_history,
+                    store_initial_value_in_history=store_initial_value_in_history,
                     accept_tol=accept_tol,
                     complexity_penalty=complexity_penalty,
                     **train_kwargs,
@@ -1709,6 +1775,13 @@ class MutableAnsatzExperiment:
                 )
             score_before += float(complexity_penalty(ansatz_before))
             score_after += float(complexity_penalty(ansatz_after))
+            
+        logger.info(
+            "Evaluating outer acceptance: score_before=%.10f, score_after=%.10f, accept_tol=%.10f.",
+            score_before,
+            score_after,
+            accept_tol,
+        )
 
         return score_after <= score_before - accept_tol
 
@@ -1977,16 +2050,30 @@ class MutableAnsatzExperiment:
 
     @property
     def optimizer(self):
+        """Return the current optimizer from the trainer."""
         return self.trainer.optimizer
 
     @property
     def gradient_history(self):
+        """Return the history of gradient evaluations from the trainer."""
         return self.trainer.gradient_history
 
     @property
     def last_cost(self):
+        """Return the last accepted cost value from the trainer."""
         return self.trainer.last_cost
 
     @property
     def last_params(self):
+        """Return the last accepted parameter vector from the trainer."""
         return self.trainer.last_params
+    
+    @property
+    def training_run_history(self):
+        """Return the stored inner-loop training-run history."""
+        return self.trainer.training_run_history
+
+    @property
+    def last_training_run_record(self):
+        """Return the most recent stored inner-loop training-run record."""
+        return self.trainer.last_training_run_record

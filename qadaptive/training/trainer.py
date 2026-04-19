@@ -7,8 +7,9 @@ import numpy as np
 from qiskit import QuantumCircuit
 from qiskit_algorithms.optimizers.optimizer import OptimizerResult
 
+from .history import IterationRecord, TrainingRunRecord
 from .optimizers import SPSA
-from .stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
+from .optimizers.stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,8 @@ class InnerLoopTrainer:
         self._last_cost = 0.0
         self._last_params = np.array([], dtype=float)
         self._last_num_iterations = 0
+        self.training_run_history: list[TrainingRunRecord] = []
+        self.last_training_run_record: TrainingRunRecord | None = None
 
     @property
     def last_cost(self) -> float:
@@ -264,6 +267,8 @@ class InnerLoopTrainer:
         loss_next: Callable[[np.ndarray], float] | None = None,
         iterations: int = 100,
         iteration_start: int | None = None,
+        record_run_history: bool = False,
+        initial_value: float | None = None,
         **kwargs,
     ) -> OptimizerResult:
         """
@@ -287,6 +292,14 @@ class InnerLoopTrainer:
             optimizers such as SPSA. If None, it will default to the optimizers
             initial step or the current iteration count if the optimizer has
             already been initialized.
+        record_run_history : bool, optional
+            If True, record the full trajectory of this training run in a
+            `TrainingRunRecord` and store it in `training_run_history`.
+            Default is False.
+        initial_value : float | None, optional
+            Objective value at the initial point, if already available. This is
+            stored in the training-run record when `record_run_history=True`.
+            If None, the initial objective is left unspecified.
         **kwargs
             Additional keyword arguments forwarded to the objective.
 
@@ -307,6 +320,21 @@ class InnerLoopTrainer:
 
         x = np.asarray(initial_point, dtype=float)
         loss_kwargs = {**kwargs, "ansatz": ansatz}
+        
+        run_record: TrainingRunRecord | None = None
+        if record_run_history:
+            param_names = [p.name for p in ansatz.parameters]
+            if len(x) != len(param_names):
+                raise ValueError("Length of initial_point does not match number of ansatz parameters.")
+            
+            run_record = TrainingRunRecord(
+                run_index=self._times_trained,
+                param_names=param_names,
+                initial_point=x.copy(),
+                initial_value=float(initial_value) if initial_value is not None else None,
+            )
+        else:
+            self.last_training_run_record = None
 
         self.optimizer.initialize(
             x,
@@ -351,6 +379,24 @@ class InnerLoopTrainer:
 
             self._run_optimizer_callback_if_present(x, fx_callback, True)
             self._run_trainer_callbacks(x, fx_callback, True)
+
+            if record_run_history and run_record is not None:
+                step_size = (
+                    0.0 if self.optimizer.last_stepsize is None
+                    else float(self.optimizer.last_stepsize)
+                )
+                run_record.iterations.append(
+                    IterationRecord(
+                        iteration=k,
+                        params=np.asarray(x, dtype=float).copy(),
+                        value=fx_callback,
+                        stepsize=step_size,
+                        accepted=True,
+                        gradient=None if gradient_estimate is None else np.asarray(
+                            gradient_estimate, dtype=float
+                        ).copy(),
+                    )
+                )
 
             checker = self.termination_checker
             if checker is None:
@@ -398,5 +444,12 @@ class InnerLoopTrainer:
         self._last_cost = result.fun
         self._last_params = np.asarray(x, dtype=float)
         self._last_num_iterations = k
+        
+        if record_run_history and run_record is not None:
+            run_record.final_value = float(result.fun)
+            self.last_training_run_record = run_record
+            self.training_run_history.append(run_record)
+        else:
+            self.last_training_run_record = None
 
         return result

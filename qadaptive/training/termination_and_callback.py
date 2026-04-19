@@ -307,3 +307,11 @@ class TerminationChecker:
                     return True        
 
         return False
+    
+    def reset(self) -> None:
+        """
+        Reset the termination checker by clearing the stored values.
+        This can be used to start a new optimization run without creating a new instance.
+        """
+        logger.info("Resetting termination checker for new optimization run.")
+        self.values.clear()

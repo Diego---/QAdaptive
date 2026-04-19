@@ -1,3 +1,4 @@
+import re
 from typing import Callable
 
 from qiskit.circuit.library import RZGate, RXGate, RYGate
@@ -7,6 +8,21 @@ from qiskit.transpiler import PassManager
 from qiskit.transpiler.basepasses import TransformationPass
 from qiskit.transpiler.passes import CommutativeCancellation, CommutativeInverseCancellation
 from qiskit.converters import circuit_to_dag
+
+_THETA_PATTERN = re.compile(r"^θ_(\d+)$")
+
+def _theta_index(param) -> int:
+    if not isinstance(param, Parameter):
+        raise ValueError(f"Expected plain Parameter, got {type(param).__name__}")
+    match = _THETA_PATTERN.match(param.name)
+    if match is None:
+        raise ValueError(f"Parameter name '{param.name}' does not match θ_i")
+    return int(match.group(1))
+
+def _node_theta_index(node) -> int:
+    if not node.op.params:
+        raise ValueError("Rotation node has no parameters.")
+    return _theta_index(node.op.params[0])
 
 class RemoveInputControlledGates(TransformationPass):
     """
@@ -100,7 +116,9 @@ class MergeConsecutiveRotations(TransformationPass):
     A transpiler pass to merge consecutive rotations of the same type on the same qubit.
 
     This pass identifies consecutive RX, RY, or RZ gates on the same qubit and merges them
-    into a single rotation gate by combining their parameters.
+    into a single rotation gate by keeping the oldest parameter.
+    
+    Example: RX(θ_0) followed by RX(θ_1) on the same qubit will be merged into a single RX(θ_0).
     """
 
     def run(self, dag: DAGCircuit) -> DAGCircuit:
@@ -118,16 +136,38 @@ class MergeConsecutiveRotations(TransformationPass):
             The transformed DAGCircuit with consecutive rotations merged.
         """
         for qubit in dag.qubits:
-            prev_node = None
+            run = []
+            run_type = None
+
             for node in list(dag.nodes_on_wire(qubit)):
                 if isinstance(node, DAGOpNode) and isinstance(node.op, (RXGate, RYGate, RZGate)):
-                    prev_nodes = list(dag.predecessors(node))
-                    if not prev_nodes:
-                        continue
-                    prev_node = prev_nodes[-1]
-                    if isinstance(prev_node, DAGOpNode) and type(node.op) == type(prev_node.op):
-                        dag.remove_op_node(prev_node)
+                    node_type = type(node.op)
+
+                    if run_type is None or node_type == run_type:
+                        run.append(node)
+                        run_type = node_type
+                    else:
+                        self._reduce_run_keep_oldest(dag, run)
+                        run = [node]
+                        run_type = node_type
+                else:
+                    self._reduce_run_keep_oldest(dag, run)
+                    run = []
+                    run_type = None
+
+            self._reduce_run_keep_oldest(dag, run)
+
         return dag
+    
+    @staticmethod
+    def _reduce_run_keep_oldest(dag: DAGCircuit, run: list) -> None:
+        if len(run) <= 3:
+            return
+
+        survivor = min(run, key=_node_theta_index)
+        for node in run:
+            if node is not survivor:
+                dag.remove_op_node(node)
 
 class ReplaceConsecutiveRotationsWithRxRyRx(TransformationPass):
     """
@@ -135,7 +175,7 @@ class ReplaceConsecutiveRotationsWithRxRyRx(TransformationPass):
 
     This pass identifies sequences of 3 or more consecutive RX, RY, or RZ gates on the same qubit
     and replaces them with a generic RxRzRx sequence. The parameters of the RxRzRx gates are
-    arbitrary and can be adjusted in a subsequent pass.
+    chosen as the oldest parameters.
     """
 
     def run(self, dag: DAGCircuit) -> DAGCircuit:
@@ -154,45 +194,41 @@ class ReplaceConsecutiveRotationsWithRxRyRx(TransformationPass):
         """
         for qubit in dag.qubits:
             rotation_sequence = []
-            nodes_to_remove = []
-            parameters_present = []
+
             for node in list(dag.nodes_on_wire(qubit)):
-                if isinstance(node, DAGOpNode):
-                    # Only aggregate parameterized gates, which assumes that other gates are there for a purpose.
-                    if isinstance(node.op, (RXGate, RYGate, RZGate)) and isinstance(node.op.params[0], Parameter):
-                        rotation_sequence.append(node)
-                        parameters_present.append(node.op.params[0])
-                        nodes_to_remove.append(node)
-                    else:
-                        if len(rotation_sequence) >= 3:
-                            for node in nodes_to_remove[1:]:
-                                dag.remove_op_node(node)
-                            replacement_circ = QuantumCircuit(1)
-                            # Which parameters are used is irrelevant, as they will be changed
-                            replacement_circ.rx(parameters_present[0], 0)
-                            replacement_circ.ry(parameters_present[1], 0)
-                            replacement_circ.rx(parameters_present[2], 0)
-                            remaining_node = nodes_to_remove[0]
-                            replacement_dag = circuit_to_dag(replacement_circ)
-                            dag.substitute_node_with_dag(remaining_node, replacement_dag)
-                        # Reset counters
-                        rotation_sequence = []
-                        nodes_to_remove = []
-                        parameters_present = []
+                if (
+                    isinstance(node, DAGOpNode)
+                    and isinstance(node.op, (RXGate, RYGate, RZGate))
+                    and isinstance(node.op.params[0], Parameter)
+                ):
+                    rotation_sequence.append(node)
                 else:
-                    # End of the circuit, check for the final rotations
-                    if len(rotation_sequence) >= 3:
-                        for node in nodes_to_remove[1:]:
-                            dag.remove_op_node(node)
-                        replacement_circ = QuantumCircuit(1)
-                        replacement_circ.rx(parameters_present[0], 0)
-                        replacement_circ.ry(parameters_present[1], 0)
-                        replacement_circ.rx(parameters_present[2], 0)
-                        remaining_node = nodes_to_remove[0]
-                        replacement_dag = circuit_to_dag(replacement_circ)
-                        dag.substitute_node_with_dag(remaining_node, replacement_dag)
-                        
+                    self._replace_run_keep_three_oldest(dag, rotation_sequence)
+                    rotation_sequence = []
+
+            self._replace_run_keep_three_oldest(dag, rotation_sequence)
+
         return dag
+
+    @staticmethod
+    def _replace_run_keep_three_oldest(dag: DAGCircuit, run: list) -> None:
+        if len(run) < 3:
+            return
+
+        oldest_three = sorted(run, key=_node_theta_index)[:3]
+        oldest_three_params = [node.op.params[0] for node in oldest_three]
+
+        anchor = run[0]
+        for node in run[1:]:
+            dag.remove_op_node(node)
+
+        replacement_circ = QuantumCircuit(1)
+        replacement_circ.rx(oldest_three_params[0], 0)
+        replacement_circ.ry(oldest_three_params[1], 0)
+        replacement_circ.rx(oldest_three_params[2], 0)
+
+        replacement_dag = circuit_to_dag(replacement_circ)
+        dag.substitute_node_with_dag(anchor, replacement_dag)
 
 def custom_pass_manager(
     remove_initial_rz: bool = False,
@@ -237,56 +273,3 @@ def custom_pass_manager(
     ])
 
     return PassManager(passes)
-
-def create_callback_args(
-    json_file_path: str | None = None,
-    store_data: bool = False,
-    extra_eval_freq: int | None = None,
-    cost_extra: Callable | None = None,
-    plot: bool = True,
-    use_epoch: bool = False
-) -> dict:
-    """
-    Generate the arguments for create_live_plot_callback.
-    
-    Parameters
-    ----------
-    json_file_path : str, optional
-        Path to JSON file for storing data.
-    store_data : bool, optional
-        Whether to store data. Defaults to False.
-    extra_eval_freq : int, optional
-        Frequency of extra cost evaluations.
-    cost_extra : Callable, optional
-        Extra cost function to evaluate.
-    plot : bool, optional
-        Whether to plot results. Defaults to True.
-    use_epoch : bool, optional
-        Whether to use epoch tracking. Defaults to False.
-    
-    Returns
-    -------
-    dict
-        A dictionary with the arguments for the callback builder.
-    """
-    counts = []
-    values = []
-    params = []
-    stepsize = []
-    values_extra = [] if extra_eval_freq is not None else None
-    
-    args = {
-        "counts": counts,
-        "values": values,
-        "params": params,
-        "stepsize": stepsize,
-        "json_file_path": json_file_path,
-        "store_data": store_data,
-        "extra_eval_freq": extra_eval_freq,
-        "cost_extra": cost_extra,
-        "values_extra": values_extra,
-        "plot": plot,
-        "use_epoch": use_epoch
-    }
-    
-    return args
