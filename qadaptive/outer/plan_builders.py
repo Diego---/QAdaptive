@@ -588,7 +588,7 @@ def build_prune_sweep_plan(
 def build_targeted_prune_plan(
     experiment: MutableAnsatzExperiment,
     targeting_function: Callable[[MutableAnsatzExperiment], TwoQMap] | None = None,
-    max_num_2q_gates: int = 1,
+    max_targets: int = 1,
     temperature: float = 0.08,
     alpha: float = 0.1,
     accept_tol: float = 0.2,
@@ -619,7 +619,7 @@ def build_targeted_prune_plan(
 
         If None, a default targeting function is used that selects all gates
         belonging to the most frequent two-qubit pair.
-    max_num_2q_gates : int, optional
+    max_targets : int, optional
         Maximum number of targeted two-qubit gates to include in the plan.
         Defaults to a single gate.
     temperature : float, optional
@@ -648,7 +648,7 @@ def build_targeted_prune_plan(
         returns no gates, if it returns invalid indices/pairs, or if
         `max_num_2q_gates` is not positive.
     """
-    if max_num_2q_gates <= 0:
+    if max_targets <= 0:
         raise ValueError("`max_num_2q_gates` must be positive if provided.")
 
     current_two_q_map = dict(experiment._2qbg_positions)
@@ -678,8 +678,8 @@ def build_targeted_prune_plan(
 
     selected_indices = sorted(targeted_map.keys())
 
-    if max_num_2q_gates is not None:
-        selected_indices = selected_indices[:max_num_2q_gates]
+    if max_targets is not None:
+        selected_indices = selected_indices[:max_targets]
 
     actions: list[ActionSpec] = []
 
