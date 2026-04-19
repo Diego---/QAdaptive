@@ -216,6 +216,15 @@ class MutableAnsatzExperiment:
 
         new_callback = callback_builder(**callback_args)
         self.reset_optimizer_callback(new_callback)
+        
+    def _reset_inner_loop_termination_checker(self) -> None:
+        """Reset the inner-loop termination checker for the next training run."""
+        try:
+            self.trainer.optimizer.termination_checker.reset()
+        except AttributeError:
+            logger.warning(
+                "Optimizer does not have a termination_checker with a reset method. Skipping termination checker reset."
+            )
 
     def get_latest_gradients(self) -> np.ndarray:
         """
@@ -971,7 +980,7 @@ class MutableAnsatzExperiment:
                 train_iterations,
             )
             
-            if initial_point_generator is None and reuse_parameter_memory and self.parameter_memory:
+            if initial_point_generator is None and reuse_parameter_memory and num_parameters_before > 0:
                 logger.info(
                     "Reusing parameter memory to build initial point for training after plan '%s'.",
                     plan.display_name,
@@ -985,8 +994,18 @@ class MutableAnsatzExperiment:
                 )
             elif initial_point_generator is None:
                 initial_point = [np.random.choice([-1.0, 1.0]) for _ in range(self.ansatz.num_parameters)]
+                logger.info(
+                    "No initial point generator provided; using random point after plan '%s': %s.",
+                    plan.display_name,
+                    initial_point,
+                )
             else:
                 initial_point = initial_point_generator(self._outer_iteration)
+                logger.info(
+                    "Generated initial point for training after plan '%s': %s",
+                    plan.display_name,
+                    initial_point,
+                )
             
             train_result = self.train_one_time(
                 loss_function=loss_function,
@@ -1005,6 +1024,8 @@ class MutableAnsatzExperiment:
                 callback_builder,
                 **({} if callback_kwargs is None else callback_kwargs)
                 ) # Will only reset if callback_builder is not None
+            
+            self._reset_inner_loop_termination_checker()
         else:
             if plan.acceptance_mode == "outer":
                 raise ValueError(
