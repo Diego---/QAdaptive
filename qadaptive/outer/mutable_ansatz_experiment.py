@@ -874,6 +874,8 @@ class MutableAnsatzExperiment:
         store_initial_value_in_history: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
+        metropolis_temperature: float | None = None,
+        metropolis_rng: np.random.Generator | None = None,
         **train_kwargs,
     ) -> OuterStepResult:
         """
@@ -927,6 +929,13 @@ class MutableAnsatzExperiment:
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
             Optional penalty added to the objective when deciding acceptance in
             `acceptance_mode="outer"`.
+        metropolis_temperature : float | None, optional
+            Temperature parameter for Metropolis-like acceptance of proposals that
+            do not satisfy the deterministic acceptance threshold. If None or
+            non-positive, acceptance remains deterministic.
+        metropolis_rng : np.random.Generator | None, optional
+            Random-number generator used for Metropolis acceptance. If None, a new
+            default generator is created when needed.
         **train_kwargs
             Additional keyword arguments forwarded to `train_one_time`.
 
@@ -1052,6 +1061,8 @@ class MutableAnsatzExperiment:
                     complexity_penalty=complexity_penalty,
                     ansatz_before=ansatz_before,
                     ansatz_after=ansatz_after,
+                    metropolis_temperature=metropolis_temperature,
+                    metropolis_rng=metropolis_rng,
                 )
                 note = None
             else:
@@ -1212,6 +1223,8 @@ class MutableAnsatzExperiment:
         store_initial_value_in_history: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
+        metropolis_temperature: float | None = None,
+        metropolis_rng: np.random.Generator | None = None,
         stop_on_error: bool = True,
         **train_kwargs,
     ) -> list[OuterStepResult]:
@@ -1278,6 +1291,13 @@ class MutableAnsatzExperiment:
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
             Optional penalty added to the objective in generic outer acceptance.
+        metropolis_temperature : float | None, optional
+            Temperature parameter for Metropolis-like acceptance of proposals that
+            do not satisfy the deterministic acceptance threshold. If None or
+            non-positive, acceptance remains deterministic.
+        metropolis_rng : np.random.Generator | None, optional
+            Random-number generator used for Metropolis acceptance. If None, a new
+            default generator is created when needed.
         stop_on_error : bool, optional
             If True, raise immediately when a plan builder or outer step fails.
             If False, log the exception and stop the loop.
@@ -1436,6 +1456,8 @@ class MutableAnsatzExperiment:
                     store_initial_value_in_history=store_initial_value_in_history,
                     accept_tol=accept_tol,
                     complexity_penalty=complexity_penalty,
+                    metropolis_temperature=metropolis_temperature,
+                    metropolis_rng=metropolis_rng,
                     **train_kwargs,
                 )
             except Exception:
@@ -1746,6 +1768,8 @@ class MutableAnsatzExperiment:
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         ansatz_before: QuantumCircuit | None = None,
         ansatz_after: QuantumCircuit | None = None,
+        metropolis_temperature: float | None = None,
+        metropolis_rng: np.random.Generator | None = None,
     ) -> bool:
         """
         Return whether a proposed outer-loop update should be accepted.
@@ -1757,8 +1781,7 @@ class MutableAnsatzExperiment:
         cost_after : float
             Objective value after the structural proposal and retraining.
         accept_tol : float, optional
-            Required improvement threshold. The proposal is accepted if the final
-            score is at least `accept_tol` lower than the initial score.
+            Required improvement threshold for deterministic acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
             Optional penalty function added to the objective in order to discourage
             overly complex ansaetze.
@@ -1766,6 +1789,13 @@ class MutableAnsatzExperiment:
             Ansatz before the proposal. Required if `complexity_penalty` is used.
         ansatz_after : QuantumCircuit | None, optional
             Ansatz after the proposal. Required if `complexity_penalty` is used.
+        metropolis_temperature : float | None, optional
+            Temperature parameter for Metropolis-like acceptance of proposals that
+            do not satisfy the deterministic acceptance threshold. If None or
+            non-positive, acceptance remains deterministic.
+        metropolis_rng : np.random.Generator | None, optional
+            Random-number generator used for Metropolis acceptance. If None, a new
+            default generator is created when needed.
 
         Returns
         -------
@@ -1783,15 +1813,56 @@ class MutableAnsatzExperiment:
                 )
             score_before += float(complexity_penalty(ansatz_before))
             score_after += float(complexity_penalty(ansatz_after))
-            
+
+        threshold_score = score_before + accept_tol
+        delta_score = score_after - threshold_score
+
         logger.info(
-            "Evaluating outer acceptance: score_before=%.10f, score_after=%.10f, accept_tol=%.10f.",
+            "Evaluating outer acceptance: score_before=%.10f, score_after=%.10f, "
+            "accept_tol=%.10f, threshold_score=%.10f.",
             score_before,
             score_after,
             accept_tol,
+            threshold_score,
         )
 
-        return score_after <= score_before - accept_tol
+        # Deterministic acceptance if the proposal clears the threshold.
+        if delta_score <= 0:
+            logger.info(
+                "Accepted outer step deterministically because score_after "
+                "cleared the acceptance threshold."
+            )
+            return True
+
+        # If Metropolis is disabled, reject uphill proposals.
+        if metropolis_temperature is None or metropolis_temperature <= 0:
+            logger.info(
+                "Rejected outer step deterministically because score_after "
+                "did not clear the acceptance threshold and Metropolis acceptance "
+                "is disabled."
+            )
+            return False
+
+        if metropolis_rng is None:
+            metropolis_rng = np.random.default_rng()
+
+        scale = max(abs(score_before), 1.0)
+        acceptance_probability = float(
+            np.exp(-delta_score / (metropolis_temperature * scale))
+        )
+        accepted = bool(metropolis_rng.random() < acceptance_probability)
+
+        logger.info(
+            "Metropolis acceptance: delta_score=%.10f, temperature=%.10f, "
+            "scale=%.10f, acceptance_probability=%.10f, accepted=%s.",
+            delta_score,
+            metropolis_temperature,
+            scale,
+            acceptance_probability,
+            accepted,
+        )
+
+        return accepted
 
     def insert_random(self) -> None:
         """
