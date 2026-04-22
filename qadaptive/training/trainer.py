@@ -434,9 +434,11 @@ class InnerLoopTrainer:
         if loss_next is None:
             logger.info("Calculating cost function value for final parameters.")
             result.fun = float(loss_function(x, ansatz=ansatz, **kwargs))
+            logger.info("Final cost function value: %s", result.fun)
         else:
             logger.info("Calculating custom cost function value for final parameters.")
             result.fun = float(loss_next(x, ansatz=ansatz, **kwargs))
+            logger.info("Final cost function value (from custom function): %s", result.fun)
 
         result.nfev = self.optimizer.nfev
         result.nit = k
