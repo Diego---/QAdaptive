@@ -530,7 +530,7 @@ class TerminationChecker:
 
         # Target-value convergence
         if self.target_value is not None:
-            if abs(self.target_value - value) < self.tol:
+            if abs(self.target_value - value) < self.target_tol:
                 return self._stop(
                     "target_reached",
                     f"Reached target value within tolerance: {self.target_value}",
