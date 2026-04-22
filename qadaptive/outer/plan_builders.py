@@ -41,6 +41,24 @@ def between_2qg_indices_policy(experiment, target, insertion_number: int) -> int
     right_index = two_q_indices[two_q_indices.index(left_index) + 1]
     return random.randint(left_index + 1, right_index)
 
+def combine_plan_builders(*builders: Callable[..., OuterStepPlan]) -> Callable[..., OuterStepPlan]:
+    """
+    Return a builder that combines the plans produced by all input builders.
+
+    Any positional or keyword arguments received by the combined builder are
+    forwarded to each underlying builder.
+    """
+    if not builders:
+        raise ValueError("At least one builder must be provided.")
+
+    def _combined_builder(*args, **kwargs) -> OuterStepPlan:
+        plan = builders[0](*args, **kwargs)
+        for builder in builders[1:]:
+            plan = plan + builder(*args, **kwargs)
+        return plan
+
+    return _combined_builder
+
 def build_nearest_neighbor_growth_plan(
     experiment: MutableAnsatzExperiment,
     block_name: str = "cx_identity",
