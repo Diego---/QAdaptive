@@ -164,6 +164,7 @@ def build_star_growth_plan(
     center_qubit: int = 0,
     block_name: str = "cx_identity",
     max_insertions: int = 2,
+    repetitions: int = 1,
     insert_index_policy: Callable | None = None,
     force_accept: bool = False,
     allowed_targets: list[int] | None = None,
@@ -192,6 +193,8 @@ def build_star_growth_plan(
         Name of the block to insert for each selected pair.
     max_insertions : int, optional
         Maximum number of block insertions to include in the plan.
+    repetitions : int, optional
+        Number of times to repeat the star-growth pattern.
     insert_index_policy : Callable | None, optional
         Function that determines the circuit-data index for each insertion.
         It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
@@ -241,25 +244,26 @@ def build_star_growth_plan(
     
     actions: list[ActionSpec] = []
 
-    for insertion_number, target in enumerate(targets):
-        target_qubits = [center_qubit, target]
-        circ_ind = insert_index_policy(
-            experiment,
-            target_qubits,
-            insertion_number,
-        )
-
-        actions.append(
-            ActionSpec(
-                action=INSERT_BLOCK,
-                kwargs={
-                    "block_name": block_name,
-                    "qubits": target_qubits,
-                    "circ_ind": circ_ind,
-                },
-                label=f"{block_name}_{center_qubit}_{target}",
+    for _ in range(repetitions):
+        for insertion_number, target in enumerate(targets):
+            target_qubits = [center_qubit, target]
+            circ_ind = insert_index_policy(
+                experiment,
+                target_qubits,
+                insertion_number,
             )
-        )
+
+            actions.append(
+                ActionSpec(
+                    action=INSERT_BLOCK,
+                    kwargs={
+                        "block_name": block_name,
+                        "qubits": target_qubits,
+                        "circ_ind": circ_ind,
+                    },
+                    label=f"{block_name}_{center_qubit}_{target}",
+                )
+            )
 
     if add_simplify:
         actions.append(
@@ -371,6 +375,7 @@ def build_single_qubit_block_plan(
     block_name: str = "rz_rx_rz",
     qubits: list[int] | None = None,
     insert_index_policy: Callable | None = None,
+    num_insertions: int = 1,
     force_accept: bool = False,
     add_simplify: bool = True,
     simplify_kwargs: dict[str, Any] | None = None,
@@ -394,6 +399,8 @@ def build_single_qubit_block_plan(
         Function that determines the circuit-data index for each insertion.
         It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
         If None, a default policy that appends at the end of the circuit is used.
+    num_insertions : int, optional
+        Number of blocks to insert on each selected qubit. Default is 1.
     force_accept : bool, optional
         Whether to set the acceptance mode to "force", which accepts all changes
         made by the plan without evaluating the cost.
@@ -424,25 +431,26 @@ def build_single_qubit_block_plan(
 
     actions: list[ActionSpec] = []
 
-    for insertion_number, qubit in enumerate(qubits):
-        if qubit < 0 or qubit >= num_qubits:
-            raise ValueError(
-                f"Qubit index {qubit} is invalid for a {num_qubits}-qubit ansatz."
-            )
+    for _ in range(num_insertions):
+        for insertion_number, qubit in enumerate(qubits):
+            if qubit < 0 or qubit >= num_qubits:
+                raise ValueError(
+                    f"Qubit index {qubit} is invalid for a {num_qubits}-qubit ansatz."
+                )
 
-        circ_ind = insert_index_policy(experiment, qubit, insertion_number)
+            circ_ind = insert_index_policy(experiment, qubit, insertion_number)
 
-        actions.append(
-            ActionSpec(
-                action=INSERT_BLOCK,
-                kwargs={
-                    "block_name": block_name,
-                    "qubits": [qubit],
-                    "circ_ind": circ_ind,
-                },
-                label=f"{block_name}_{qubit}",
+            actions.append(
+                ActionSpec(
+                    action=INSERT_BLOCK,
+                    kwargs={
+                        "block_name": block_name,
+                        "qubits": [qubit],
+                        "circ_ind": circ_ind,
+                    },
+                    label=f"{block_name}_{qubit}",
+                )
             )
-        )
 
     if add_simplify:
         actions.append(
