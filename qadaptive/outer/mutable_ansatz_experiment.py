@@ -1351,6 +1351,8 @@ class MutableAnsatzExperiment:
                 **({} if callback_kwargs is None else callback_kwargs)
                 ) # Will only reset if callback_builder is not None
             
+            self._reset_inner_loop_termination_checker()
+            
             if record_parameter_memory:
                 self._record_parameter_memory(
                     action="Initial training before first plan",
