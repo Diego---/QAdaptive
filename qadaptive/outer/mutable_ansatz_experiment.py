@@ -1557,11 +1557,16 @@ class MutableAnsatzExperiment:
         )
 
     def _action_insert_block(self, **kwargs) -> None:
-        """Insert a specified block at a given circuit index."""
+        """Insert a specified block, resolving the insertion index at execution time."""
+        insert_policy = kwargs["insert_policy"]
+        insertion_number = kwargs["insertion_number"]
+        qubits = kwargs["qubits"]
+        circ_ind = insert_policy(self, qubits, insertion_number)
+
         self.insert_block_at(
             block_name=kwargs["block_name"],
-            qubits=kwargs["qubits"],
-            circ_ind=kwargs["circ_ind"],
+            qubits=qubits,
+            circ_ind=circ_ind,
         )
 
     def _action_remove_gate(self, **kwargs) -> None:
@@ -1611,7 +1616,7 @@ class MutableAnsatzExperiment:
         Parameters
         ----------
         spec : ActionSpec
-            ActionSpec to apply. Supported actions are:
+            ActionSpec to apply. Some supported actions are:
             - ``"insert_random_gate"``
             - ``"insert_gate"``
             - ``"insert_block"``
@@ -1666,7 +1671,12 @@ class MutableAnsatzExperiment:
         ValueError
             If any action in the plan is unknown or if a required argument is missing.
         """
-        for spec in plan.actions:
+        for i, spec in enumerate(plan.actions):
+            logger.info(
+                "Executing action %s/%s.",
+                i + 1,
+                len(plan.actions),
+            )
             self._apply_action(spec, cost=cost)
     
     def _snapshot_state(self) -> ExperimentSnapshot:
