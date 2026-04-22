@@ -351,7 +351,6 @@ def select_locked_gates(
 
 def make_select_gates_on_qubit(
     qubit: int,
-    max_gates: int | None = None,
 ) -> Callable[[MutableAnsatzExperiment], TwoQMap]:
     """
     Build a selector that returns gates acting on a specific qubit.
@@ -370,7 +369,7 @@ def make_select_gates_on_qubit(
     """
     def selector(experiment: MutableAnsatzExperiment) -> TwoQMap:
         selected = select_gates_on_qubit(experiment, qubit=qubit)
-        return take_first_n_gates(selected, max_gates)
+        return selected
 
     return selector
 
@@ -395,7 +394,12 @@ def make_select_gates_on_pair(
     """
     def selector(experiment: MutableAnsatzExperiment) -> TwoQMap:
         selected = select_gates_on_pair(experiment, pair=pair)
-        return take_first_n_gates(selected, max_gates)
+        available_selected = {
+            circ_ind: pair
+            for circ_ind, pair in sorted(selected.items())
+            if not experiment._is_locked_circuit_index(circ_ind)
+        }
+        return take_first_n_gates(available_selected, max_gates)
 
     return selector
 
@@ -425,7 +429,8 @@ def make_select_random_gates(
     num_gates: int = 1,
 ) -> Callable[[MutableAnsatzExperiment], TwoQMap]:
     """
-    Build a selector that returns a random subset of tracked two-qubit gates.
+    Build a selector that returns a random subset of currently unlocked
+    tracked two-qubit gates.
 
     Parameters
     ----------
@@ -446,13 +451,17 @@ def make_select_random_gates(
         raise ValueError("`num_gates` must be positive.")
 
     def selector(experiment: MutableAnsatzExperiment) -> TwoQMap:
-        items = list(sorted(experiment._2qbg_positions.items()))
+        items = [
+            (circ_ind, pair)
+            for circ_ind, pair in sorted(experiment._2qbg_positions.items())
+            if not experiment._is_locked_circuit_index(circ_ind)
+        ]
 
         if not items:
             return {}
 
         sampled = random.sample(items, k=min(num_gates, len(items)))
-        return dict(sorted(sampled))
+        return dict(sampled)
 
     return selector
 
