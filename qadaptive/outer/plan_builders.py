@@ -508,9 +508,6 @@ def build_simplification_plan(
 def build_prune_sweep_plan(
     experiment: MutableAnsatzExperiment,
     gate_indices: list[int] | None = None,
-    temperature: float = 0.08,
-    alpha: float = 0.1,
-    accept_tol: float = 0.2,
     label: str | None = None,
     add_simplify: bool = False,
     simplify_kwargs: dict[str, Any] | None = None,
@@ -531,14 +528,12 @@ def build_prune_sweep_plan(
     gate_indices : list[int] | None, optional
         Circuit-data indices of two-qubit gates to consider in the sweep.
         If None, all currently present two-qubit gates are used.
-    temperature : float, optional
-        Temperature parameter passed to the pruning routine.
-    alpha : float, optional
-        Locking-probability scaling parameter passed to the pruning routine.
-    accept_tol : float, optional
-        Acceptance tolerance passed to the pruning routine.
     label : str | None, optional
         Optional descriptive label for the plan.
+    add_simplify : bool, optional
+        Whether to append a simplification action after the prune sweep.
+    simplify_kwargs : dict[str, Any] | None, optional
+        Keyword arguments for the simplification action.
 
     Returns
     -------
@@ -569,14 +564,11 @@ def build_prune_sweep_plan(
                 kwargs={
                     "target_occurrence": occurrence,
                     "target_pair": pair,
-                    "temperature": temperature,
-                    "alpha": alpha,
-                    "accept_tol": accept_tol,
                 },
                 label=f"prune_{pair}_{occurrence}",
             )
         )
-        
+
     if add_simplify:
         actions.append(
             ActionSpec(
@@ -589,24 +581,21 @@ def build_prune_sweep_plan(
     return OuterStepPlan(
         name="prune_sweep",
         actions=actions,
-        acceptance_mode="internal",
+        acceptance_mode="outer",
         label=label,
     )
 
 def build_targeted_prune_plan(
     experiment: MutableAnsatzExperiment,
     targeting_function: Callable[[MutableAnsatzExperiment], TwoQMap] | None = None,
-    max_targets: int = 1,
-    temperature: float = 0.08,
-    alpha: float = 0.1,
-    accept_tol: float = 0.2,
+    max_num_2q_gates: int = 1,
     label: str | None = None,
     add_simplify: bool = False,
     simplify_kwargs: dict[str, Any] | None = None,
 ) -> OuterStepPlan:
     """
-    Build a macro-plan that performs targeted prune attempts on selected
-    two-qubit gates.
+    Build a macro-plan that performs targeted structural prune proposals on
+    selected two-qubit gates.
 
     The targeted gates are stored in the plan using stable pair-occurrence
     identifiers rather than raw circuit-data indices, so that later actions in
@@ -627,15 +616,9 @@ def build_targeted_prune_plan(
 
         If None, a default targeting function is used that selects all gates
         belonging to the most frequent two-qubit pair.
-    max_targets : int, optional
+    max_num_2q_gates : int, optional
         Maximum number of targeted two-qubit gates to include in the plan.
         Defaults to a single gate.
-    temperature : float, optional
-        Temperature parameter passed to the pruning routine.
-    alpha : float, optional
-        Locking-probability scaling parameter passed to the pruning routine.
-    accept_tol : float, optional
-        Acceptance tolerance passed to the pruning routine.
     label : str | None, optional
         Optional descriptive label for the plan.
     add_simplify : bool, optional
@@ -647,17 +630,18 @@ def build_targeted_prune_plan(
     Returns
     -------
     OuterStepPlan
-        Plan that performs targeted prune attempts in internal-acceptance mode.
+        Plan that performs targeted structural prune proposals.
 
     Raises
     ------
     ValueError
         If there are no tracked two-qubit gates, if the targeting function
-        returns no gates, if it returns invalid indices/pairs, or if
-        `max_num_2q_gates` is not positive.
+        returns no gates, if it returns invalid indices/pairs, if
+        ``max_num_2q_gates`` is not positive, or if ``acceptance_mode`` is
+        invalid.
     """
-    if max_targets <= 0:
-        raise ValueError("`max_num_2q_gates` must be positive if provided.")
+    if max_num_2q_gates <= 0:
+        raise ValueError("`max_num_2q_gates` must be positive.")
 
     current_two_q_map = dict(experiment._2qbg_positions)
 
@@ -684,10 +668,17 @@ def build_targeted_prune_plan(
                 f"expected {current_two_q_map[circ_ind]}, got {pair}."
             )
 
-    selected_indices = sorted(targeted_map.keys())
+    # Filter out locked targets before applying the cap.
+    available_indices = [
+        circ_ind
+        for circ_ind in sorted(targeted_map.keys())
+        if not experiment._is_locked_circuit_index(circ_ind)
+    ]
 
-    if max_targets is not None:
-        selected_indices = selected_indices[:max_targets]
+    if not available_indices:
+        raise ValueError("All targeted two-qubit gates are currently locked.")
+
+    selected_indices = available_indices[:max_num_2q_gates]
 
     actions: list[ActionSpec] = []
 
@@ -700,9 +691,6 @@ def build_targeted_prune_plan(
                 kwargs={
                     "target_occurrence": occurrence,
                     "target_pair": pair,
-                    "temperature": temperature,
-                    "alpha": alpha,
-                    "accept_tol": accept_tol,
                 },
                 label=f"targeted_prune_{pair}_{occurrence}",
             )
@@ -720,6 +708,6 @@ def build_targeted_prune_plan(
     return OuterStepPlan(
         name="targeted_prune",
         actions=actions,
-        acceptance_mode="internal",
+        acceptance_mode="outer",
         label=label,
     )

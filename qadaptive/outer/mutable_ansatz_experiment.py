@@ -23,7 +23,7 @@ from qadaptive.core.mutation import (
     TwoQMap
 )
 from qadaptive.core.simplification import simplify_ansatz
-from qadaptive.core.pruning import evaluate_two_qubit_gate_pruning
+from qadaptive.core.pruning import make_two_qubit_pruning_proposal, PruningProposal
 from qadaptive.outer.action_definitions import (
     INSERT_RANDOM_GATE,
     INSERT_GATE,
@@ -203,6 +203,7 @@ class MutableAnsatzExperiment:
     ) -> None:
         """Rebuild the optimizer callback and reset optimizer iteration for the next inner-loop run."""
         if callback_builder is None:
+            logger.warning("Optimizer does not have a callback builder. Skipping callback reset.")
             return
 
         callback_args = create_callback_args(
@@ -1146,7 +1147,7 @@ class MutableAnsatzExperiment:
                 
             self._record_accepted_ansatz(
                     action=plan.display_name,
-                    cost=None,
+                    cost=cost_after,
                     note=note
                 )
             
@@ -1552,34 +1553,28 @@ class MutableAnsatzExperiment:
         )
 
     def _action_prune_two_qubit(self, **kwargs) -> None:
-        """Attempt to prune one non-locked two-qubit gate."""
+        """Apply one structural two-qubit pruning proposal."""
         gate_to_remove = kwargs.get("gate_to_remove")
-        
+
         if gate_to_remove is None and "target_occurrence" in kwargs and "target_pair" in kwargs:
             target_occurrence = kwargs["target_occurrence"]
             target_pair = kwargs["target_pair"]
-            
+
             gate_to_remove = self._get_circuit_index_from_pair_occurrence(
                 occurrence=target_occurrence,
                 pair=target_pair,
             )
-            
+
         if gate_to_remove is None:
             logger.info(
                 "Skipping targeted prune because gate with pair %s and occurrence %s "
                 "no longer exists in the current ansatz.",
-                target_pair,
-                target_occurrence,
+                kwargs.get("target_pair"),
+                kwargs.get("target_occurrence"),
             )
             return
-        
-        self.prune_two_qubit_gate_attempt(
-            cost=kwargs["cost"],
-            gate_to_remove=gate_to_remove,
-            temperature=kwargs.get("temperature", 0.08),
-            alpha=kwargs.get("alpha", 0.1),
-            accept_tol=kwargs.get("accept_tol", 0.2),
-        )
+
+        self.apply_two_qubit_pruning_proposal(gate_to_remove=gate_to_remove)
         
     def _apply_action(
         self,
@@ -1980,75 +1975,53 @@ class MutableAnsatzExperiment:
 
         return self.adaptive_ansatz.current_ansatz
 
-    def prune_two_qubit_gate_attempt(
-        self, 
-        cost: Callable, 
+    def apply_two_qubit_pruning_proposal(
+        self,
         gate_to_remove: int | None = None,
-        temperature: float = 0.08, 
-        alpha: float = 0.1, 
-        accept_tol: float = 0.2
-        ) -> None:
+    ) -> bool:
         """
-        Attempt to prune one non-locked two-qubit gate from the current ansatz.
+        Apply a structural proposal that removes one non-locked two-qubit gate.
 
         Parameters
         ----------
-        cost : Callable
-            Cost function with signature ``cost(params, ansatz)``.
         gate_to_remove : int | None, optional
-            Specific circuit index of the two-qubit gate to attempt to prune. If None, 
-            a gate is chosen automatically from the non-locked two-qubit gates in the ansatz.
-        temperature : float, optional
-            The temperature factor for Metropolis-like acceptance probability:
-            .. math::
-                p = exp(-\beta \frac{C_{new} - C_{o}}{C_o})
-        alpha : float, optional
-            Scaling factor for gate locking probability:
-            .. math::
-                P_{\text{lock}} = 1 - e^{-\alpha \frac{\Delta C}{|C_o|}}
-        accept_tol : float, optional
-            Tolerance for accepting the change. Defaults to 0.2.
-                
-        Notes
-        -----
-        This method evaluates the trial removal at the current trained parameter
-        vector and then either applies the accepted pruning or locks the rejected
-        gate according to the pruning policy.
+            Circuit-data index of the tracked two-qubit gate to remove. If None,
+            one removable gate is selected automatically.
+
+        Returns
+        -------
+        bool
+            True if a proposal was successfully applied, False otherwise.
         """
-        assert len(self.last_params) > 0, (
-            "Ansatz has not been trained yet. Train to set last parameters."
-        )
-        
-        decision = evaluate_two_qubit_gate_pruning(
+        proposal = make_two_qubit_pruning_proposal(
             ansatz=self.ansatz,
             two_q_map=self._2qbg_positions,
             locked_gates=self.locked_gates,
-            last_params=self.last_params,
-            last_cost=self.last_cost,
-            cost=cost,
             is_locked=is_locked_circuit_index,
-            temperature=temperature,
-            alpha=alpha,
-            accept_tol=accept_tol,
-            gate_to_remove=gate_to_remove
+            gate_to_remove=gate_to_remove,
         )
-        
-        if not decision.attempted:
-            return
 
-        assert decision.gate_to_remove is not None
+        if not proposal.attempted:
+            if proposal.note is not None:
+                logger.info(proposal.note)
+            return False
 
-        if decision.accepted:
-            self._update_locked_gates_on_removal(decision.gate_to_remove)
-            self.adaptive_ansatz.update_ansatz(decision.trial_ansatz)
-            self._sync_after_ansatz_change()
-            self.trainer.update_last_evaluation(cost=decision.trial_cost)
-            return
+        assert proposal.gate_to_remove is not None
+        assert proposal.trial_ansatz is not None
 
-        if decision.should_lock:
-            self._lock_circuit_index(decision.gate_to_remove)
+        self._update_locked_gates_on_removal(proposal.gate_to_remove)
+        self.adaptive_ansatz.update_ansatz(proposal.trial_ansatz)
+        self._sync_after_ansatz_change()
+        self.prune_parameter_memory_to_current_ansatz()
 
-        logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
+        logger.info(
+            "Applied structural pruning proposal: removed gate at circuit index %s "
+            "(pair=%s, occurrence=%s).",
+            proposal.gate_to_remove,
+            proposal.target_pair,
+            proposal.target_occurrence,
+        )
+        return True
         
     def get_current_parameters(self) -> list[Parameter]:
         return self.adaptive_ansatz.get_current_ansatz().parameters

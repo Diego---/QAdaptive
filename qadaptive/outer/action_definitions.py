@@ -36,6 +36,5 @@ ACTION_DEFINITIONS: dict[str, ActionDefinition] = {
     ),
     PRUNE_TWO_QUBIT: ActionDefinition(
         name=PRUNE_TWO_QUBIT,
-        requires_cost=True,
     ),
 }
