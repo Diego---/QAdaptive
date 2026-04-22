@@ -347,13 +347,9 @@ class TerminationChecker:
 
     def __init__(
         self,
-        target_value: float | None = None,
-        tol: float = 1e-3,
         mode: Literal["min", "max"] = "min",
-        stagnation_tol: float | None = None,
-        number_past_iterations: int | None = None,
-        noisy_oscillation_tol: float | None = None,
-        number_past_iterations_oscillation: int | None = None,
+        target_value: float | None = None,
+        target_tol: float = 1e-3,
         plateau_window: int | None = None,
         plateau_slope_tol: float | None = None,
         plateau_improvement_tol: float | None = None,
@@ -365,36 +361,25 @@ class TerminationChecker:
         gradient_norm_tol: float | None = None,
         gradient_norm_std_tol: float | None = None,
         gradient_improvement_tol: float | None = None,
+        verbose: bool = True,
     ) -> None:
         """
         Initialize the TerminationChecker instance.
 
         Parameters
         ----------
-        target_value : float or None, optional
-            Target objective value.
-        tol : float, optional
-            Tolerance used when checking proximity to `target_value`.
         mode : {"min", "max"}, optional
             Whether the objective is being minimized or maximized.
-
-        stagnation_tol : float or None, optional
-            Backward-compatible alias used to initialize plateau tolerances if the
-            newer plateau-specific arguments are not provided.
-        number_past_iterations : int or None, optional
-            Backward-compatible alias for `plateau_window`.
-        noisy_oscillation_tol : float or None, optional
-            Backward-compatible alias for `noisy_std_tol`.
-        number_past_iterations_oscillation : int or None, optional
-            Backward-compatible alias for `noisy_window`.
-
+        target_value : float or None, optional
+            Target objective value.
+        target_tol : float, optional
+            Tolerance used when checking proximity to `target_value`.
         plateau_window : int or None, optional
             Window size used for plateau detection.
         plateau_slope_tol : float or None, optional
             Threshold on the absolute slope of the objective over the plateau window.
         plateau_improvement_tol : float or None, optional
             Threshold on the best improvement over the plateau window.
-
         noisy_window : int or None, optional
             Window size used for noisy wandering detection.
         noisy_std_tol : float or None, optional
@@ -403,7 +388,6 @@ class TerminationChecker:
             Threshold on the absolute slope over the noisy window.
         noisy_improvement_tol : float or None, optional
             Threshold on the best improvement over the noisy window.
-
         gradient_window : int or None, optional
             Window size used for gradient-flattening detection.
         gradient_norm_tol : float or None, optional
@@ -412,71 +396,102 @@ class TerminationChecker:
             Threshold on the standard deviation of gradient norms over the gradient window.
         gradient_improvement_tol : float or None, optional
             Threshold on the best objective improvement over the gradient window.
+        verbose : bool, optional
+            Whether to print stop messages in addition to logging them.
         """
-        self.target_value = target_value # Default to None (no convergence to target check)
-        self.tol = tol
-        self.mode = mode
-        
-        self.plateau_window = plateau_window if plateau_window is not None else number_past_iterations
-        self.plateau_slope_tol = plateau_slope_tol if plateau_slope_tol is not None else stagnation_tol
-        self.plateau_improvement_tol = (
-            plateau_improvement_tol if plateau_improvement_tol is not None else stagnation_tol
-        )
 
-        self.noisy_window = noisy_window if noisy_window is not None else number_past_iterations_oscillation
-        self.noisy_std_tol = noisy_std_tol if noisy_std_tol is not None else noisy_oscillation_tol
-        self.noisy_slope_tol = noisy_slope_tol if noisy_slope_tol is not None else self.plateau_slope_tol
-        self.noisy_improvement_tol = (
-            noisy_improvement_tol
-            if noisy_improvement_tol is not None
-            else self.plateau_improvement_tol
-        )
+        if mode not in {"min", "max"}:
+            raise ValueError("`mode` must be either 'min' or 'max'.")
+
+        for name, window in (
+            ("plateau_window", plateau_window),
+            ("noisy_window", noisy_window),
+            ("gradient_window", gradient_window),
+        ):
+            if window is not None and window < 2:
+                raise ValueError(f"`{name}` must be >= 2.")
+        
+        for name, tol in (
+            ("target_tol", target_tol),
+            ("plateau_slope_tol", plateau_slope_tol),
+            ("plateau_improvement_tol", plateau_improvement_tol),
+            ("noisy_std_tol", noisy_std_tol),
+            ("noisy_slope_tol", noisy_slope_tol),
+            ("noisy_improvement_tol", noisy_improvement_tol),
+            ("gradient_norm_tol", gradient_norm_tol),
+            ("gradient_norm_std_tol", gradient_norm_std_tol),
+            ("gradient_improvement_tol", gradient_improvement_tol),
+        ):
+            if tol is not None and tol < 0:
+                raise ValueError(f"`{name}` must be non-negative.")
+            
+        self.mode = mode
+        self.target_value = target_value
+        self.target_tol = target_tol
+        
+        self.plateau_window = plateau_window
+        self.plateau_slope_tol = plateau_slope_tol
+        self.plateau_improvement_tol = plateau_improvement_tol
+
+        self.noisy_window = noisy_window
+        self.noisy_std_tol = noisy_std_tol
+        self.noisy_slope_tol = noisy_slope_tol
+        self.noisy_improvement_tol = noisy_improvement_tol
 
         self.gradient_window = gradient_window
         self.gradient_norm_tol = gradient_norm_tol
         self.gradient_norm_std_tol = gradient_norm_std_tol
         self.gradient_improvement_tol = gradient_improvement_tol
 
+        self.verbose = verbose
+
         self.values: list[float] = []
         self.grad_norms: list[float] = []
         self.last_reason: str | None = None
 
-    def update_gradient(self, gradient: Sequence[float] | np.ndarray | None) -> None:
+    @staticmethod
+    def _window_slope(values: list[float]) -> float:
+        """Return the slope of a linear fit over the supplied window."""
+        y = np.asarray(values, dtype=float)
+        x = np.arange(len(y), dtype=float)
+        return float(np.polyfit(x, y, 1)[0])
+
+    def _window_improvement(self, values: list[float]) -> float:
         """
-        Append the norm of a gradient estimate.
+        Return best improvement over the window as a positive number.
+
+        For minimization:
+            first_value - min(window)
+
+        For maximization:
+            max(window) - first_value
+        """
+        y = np.asarray(values, dtype=float)
+        if self.mode == "min":
+            return float(y[0] - np.min(y))
+        return float(np.max(y) - y[0])
+
+    def update_gradient(self, gradient: list[float] | np.ndarray | None) -> None:
+        """
+        Record gradient norm for gradient-flattening checks.
 
         Parameters
         ----------
-        gradient : Sequence[float] or np.ndarray or None
-            Gradient estimate to record. If None, no action is taken.
+        gradient : list[float] | np.ndarray | None
+            Gradient estimate. If None, nothing is recorded.
         """
         if gradient is None:
             return
 
         grad = np.asarray(gradient, dtype=float)
         self.grad_norms.append(float(np.linalg.norm(grad)))
-        
+
     def _stop(self, reason: str, message: str) -> bool:
-        """
-        Log a termination event and return True.
-
-        Parameters
-        ----------
-        reason : str
-            Machine-readable termination reason.
-        message : str
-            Human-readable log message.
-
-        Returns
-        -------
-        bool
-            Always True.
-        """
         self.last_reason = reason
         logger.info(message)
-        print(message)
+        if self.verbose:
+            print(message)
         return True
-
 
     def __call__(
         self,
@@ -487,7 +502,7 @@ class TerminationChecker:
         accepted: bool,
     ) -> bool:
         """
-        Evaluate whether optimization should terminate.
+        Check whether optimization should terminate.
 
         Parameters
         ----------
@@ -498,14 +513,14 @@ class TerminationChecker:
         value : float
             Current objective value.
         stepsize : float
-            Current optimizer step size.
+            Current step size.
         accepted : bool
-            Whether the latest candidate was accepted.
+            Whether the current step was accepted.
 
         Returns
         -------
         bool
-            True if termination criteria are met, otherwise False.
+            True if a stopping criterion is met, False otherwise.
         """
         del nfev, parameters, stepsize, accepted
 
@@ -513,6 +528,7 @@ class TerminationChecker:
         self.values.append(value)
         self.last_reason = None
 
+        # Target-value convergence
         if self.target_value is not None:
             if abs(self.target_value - value) < self.tol:
                 return self._stop(
@@ -520,6 +536,7 @@ class TerminationChecker:
                     f"Reached target value within tolerance: {self.target_value}",
                 )
 
+        # Plateau detection
         if (
             self.plateau_window is not None
             and self.plateau_slope_tol is not None
@@ -527,8 +544,8 @@ class TerminationChecker:
             and len(self.values) >= self.plateau_window
         ):
             recent = self.values[-self.plateau_window :]
-            slope = _linear_slope(recent)
-            improvement = _window_improvement(recent, mode=self.mode)
+            slope = self._window_slope(recent)
+            improvement = self._window_improvement(recent)
 
             if abs(slope) < self.plateau_slope_tol and improvement < self.plateau_improvement_tol:
                 return self._stop(
@@ -541,6 +558,7 @@ class TerminationChecker:
                     ),
                 )
 
+        # Noisy wandering detection
         if (
             self.noisy_window is not None
             and self.noisy_std_tol is not None
@@ -550,8 +568,8 @@ class TerminationChecker:
         ):
             recent = self.values[-self.noisy_window :]
             std_dev = float(np.std(recent))
-            slope = _linear_slope(recent)
-            improvement = _window_improvement(recent, mode=self.mode)
+            slope = self._window_slope(recent)
+            improvement = self._window_improvement(recent)
 
             if (
                 std_dev > self.noisy_std_tol
@@ -569,38 +587,41 @@ class TerminationChecker:
                     ),
                 )
 
+        # Gradient flattening detection
         if (
             self.gradient_window is not None
             and self.gradient_norm_tol is not None
             and len(self.grad_norms) >= self.gradient_window
             and len(self.values) >= self.gradient_window
         ):
-            recent_grad_norms = np.asarray(self.grad_norms[-self.gradient_window :], dtype=float)
+            recent_grad_norms = np.asarray(
+                self.grad_norms[-self.gradient_window :], dtype=float
+            )
             recent_values = self.values[-self.gradient_window :]
 
-            grad_norm_median = float(np.median(recent_grad_norms))
-            grad_norm_std = float(np.std(recent_grad_norms))
-            improvement = _window_improvement(recent_values, mode=self.mode)
+            grad_median = float(np.median(recent_grad_norms))
+            grad_std = float(np.std(recent_grad_norms))
+            improvement = self._window_improvement(recent_values)
 
-            gradient_flat = grad_norm_median < self.gradient_norm_tol
-            gradient_stable = (
+            flat_enough = grad_median < self.gradient_norm_tol
+            stable_enough = (
                 True
                 if self.gradient_norm_std_tol is None
-                else grad_norm_std < self.gradient_norm_std_tol
+                else grad_std < self.gradient_norm_std_tol
             )
-            progress_small = (
+            little_progress = (
                 True
                 if self.gradient_improvement_tol is None
                 else improvement < self.gradient_improvement_tol
             )
 
-            if gradient_flat and gradient_stable and progress_small:
+            if flat_enough and stable_enough and little_progress:
                 return self._stop(
                     "gradient_flattening",
                     (
                         "Detected gradient flattening: "
-                        f"median_grad_norm={grad_norm_median:.6g}, "
-                        f"std_grad_norm={grad_norm_std:.6g}, "
+                        f"median_grad_norm={grad_median:.6g}, "
+                        f"std_grad_norm={grad_std:.6g}, "
                         f"best_improvement={improvement:.6g}, "
                         f"window={self.gradient_window}"
                     ),
@@ -609,13 +630,7 @@ class TerminationChecker:
         return False
 
     def reset(self) -> None:
-        """
-        Reset all stored histories and termination state.
-
-        Returns
-        -------
-        None
-        """
+        """Reset stored histories and last stop reason."""
         logger.info("Resetting termination checker for new optimization run.")
         self.values.clear()
         self.grad_norms.clear()
