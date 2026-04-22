@@ -214,6 +214,8 @@ class MutableAnsatzExperiment:
             plot=callback_kwargs.get("plot", True),
             use_epoch=callback_kwargs.get("use_epoch", False),
         )
+        
+        logger.info("Setting new optimizer callback function with args: %s.", callback_args)
 
         new_callback = callback_builder(**callback_args)
         self.reset_optimizer_callback(new_callback)
