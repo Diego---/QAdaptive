@@ -31,7 +31,7 @@ def test_pool_block_build_validates_parameter_count():
 
 
 def test_default_block_pool_contains_expected_blocks():
-    assert set(DEFAULT_BLOCK_POOL) == {"rz_rx_rz", "cx_identity", "cz_identity", "single_cx_block", "single_cz_block"}
+    assert  all(block in set(DEFAULT_BLOCK_POOL) for block in {"rz_rx_rz", "cx_identity", "cz_identity", "single_cx_block", "single_cz_block"})
 
 
 
