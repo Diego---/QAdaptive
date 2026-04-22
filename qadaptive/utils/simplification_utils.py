@@ -6,7 +6,11 @@ from qiskit.circuit import QuantumCircuit, Parameter, ParameterExpression
 from qiskit.dagcircuit import DAGCircuit, DAGInNode, DAGOpNode, DAGOutNode
 from qiskit.transpiler import PassManager
 from qiskit.transpiler.basepasses import TransformationPass
-from qiskit.transpiler.passes import CommutativeCancellation, CommutativeInverseCancellation
+from qiskit.transpiler.passes import (
+    CommutativeCancellation,
+    CommutativeInverseCancellation,
+    Optimize1qGatesDecomposition
+)
 from qiskit.converters import circuit_to_dag
 
 _THETA_PATTERN = re.compile(r"^θ_(\d+)$")
@@ -373,10 +377,15 @@ def custom_pass_manager(
     return PassManager(passes)
 
 
-def unitary_preserving_pass_manager() -> PassManager:
+def unitary_preserving_pass_manager(basis: list[str]) -> PassManager:
     """
     Create a conservative PassManager that preserves mathematical equivalence
     of the implemented unitary.
+    
+    Parameters
+    ----------
+    basis : list[str]
+        Basis for Optimize1qGatesDecomposition.
 
     Returns
     -------
@@ -390,6 +399,7 @@ def unitary_preserving_pass_manager() -> PassManager:
     """
     return PassManager([
         ExactMergeConsecutiveRotations(),
+        Optimize1qGatesDecomposition(basis=basis),
         CommutativeCancellation(),
         CommutativeInverseCancellation(),
         ExactMergeConsecutiveRotations(),
