@@ -1192,7 +1192,7 @@ class MutableAnsatzExperiment:
         loss_function: Callable[[np.ndarray], float],
         plan_schedule: list[Callable[["MutableAnsatzExperiment"], OuterStepPlan]],
         outer_iterations: int | None = None,
-        train_iterations: int = 100,
+        train_iterations: int | list[int] = 100,
         train_before_first_plan: bool = True,
         initial_point: list | np.ndarray | None = None,
         initial_point_generator: Callable[..., np.ndarray] | None = None,
@@ -1227,8 +1227,10 @@ class MutableAnsatzExperiment:
         outer_iterations : int | None, optional
             Number of outer-loop steps to execute. If None, the schedule length is
             used.
-        train_iterations : int, optional
+        train_iterations : int | list[int], optional
             Number of inner-loop optimization steps after each executed plan.
+            Can be constant for all outer-loop iterations or specified as a list 
+            of the same length as `outer_iterations`
         train_before_first_plan : bool, optional
             Whether to perform an initial training phase before executing the first plan.
         initial_point : list | np.ndarray | None, optional
@@ -1306,10 +1308,15 @@ class MutableAnsatzExperiment:
             len(plan_schedule),
         )
         
-        if train_before_first_plan and self._outer_iteration == 0:     
+        train_iterations_list: list[int] = train_iterations.copy() if isinstance(train_iterations, list) else [train_iterations] * outer_iterations
+        if train_before_first_plan:
+            train_iterations_list = [train_iterations_list[0]] + train_iterations_list  # Add an initial training phase before the first plan if requested
+        
+        if train_before_first_plan and self._outer_iteration == 0:
+            current_train_iterations = train_iterations_list.pop(0)    
             logger.info(
                 "Training before first plan execution for %d inner-loop iterations.",
-                train_iterations,
+                current_train_iterations,
             )
             
             if initial_point is None:
@@ -1331,7 +1338,7 @@ class MutableAnsatzExperiment:
                 loss_function=loss_function,
                 initial_point=initial_point,
                 loss_next=loss_next,
-                iterations=train_iterations,
+                iterations=current_train_iterations,
                 update_parameter_memory=update_parameter_memory,
                 trainer_iteration_reset=trainer_iteration_reset,
                 record_run_history=record_run_history,
