@@ -1411,12 +1411,14 @@ class MutableAnsatzExperiment:
                 plan.display_name,
                 self._outer_iteration,
             )
+            
+            current_train_iterations = train_iterations_list.pop(0)
 
             try:
                 result = self.run_outer_step(
                     loss_function=loss_function,
                     plan=plan,
-                    train_iterations=train_iterations,
+                    train_iterations=current_train_iterations,
                     initial_point_generator=initial_point_generator,
                     loss_next=loss_next,
                     train_after_plan=train_after_plan,
