@@ -268,6 +268,16 @@ class OuterStepPlan:
 
         if len(self.actions) == 0:
             raise ValueError("`actions` must contain at least one ActionSpec.")
+        
+    def __add__(self, other: OuterStepPlan) -> OuterStepPlan:
+        """Combine two `OuterStepPlan` instances into a new one by concatenating their actions."""
+        new_plan = OuterStepPlan(
+            name=f"{self.name} + {other.name}",
+            actions=self.actions + other.actions,
+            acceptance_mode=self.acceptance_mode,  # Keep the acceptance mode of the first plan
+        )
+        
+        return new_plan
 
     @property
     def display_name(self) -> str:
