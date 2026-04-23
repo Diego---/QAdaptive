@@ -25,7 +25,12 @@ ACTION_DEFINITIONS: dict[str, ActionDefinition] = {
     ),
     INSERT_BLOCK: ActionDefinition(
         name=INSERT_BLOCK,
-        required_kwargs=("block_name", "qubits", "circ_ind"),
+        required_kwargs=(
+            "block_name",
+            "qubits",
+            "insert_policy",
+            "insertion_number",
+        ),
     ),
     REMOVE_GATE: ActionDefinition(
         name=REMOVE_GATE,
@@ -36,6 +41,5 @@ ACTION_DEFINITIONS: dict[str, ActionDefinition] = {
     ),
     PRUNE_TWO_QUBIT: ActionDefinition(
         name=PRUNE_TWO_QUBIT,
-        requires_cost=True,
     ),
 }

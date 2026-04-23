@@ -11,6 +11,9 @@ def plot_cost_with_outer_boundaries(
     figsize: tuple[int, int] = (12, 5),
     annotate_actions: bool = True,
     label_rotation: float = 10,
+    title: str | None = "Objective trace with outer-step boundaries",
+    title_pad: int = 16,
+    title_loc: str = "center",
 ) -> tuple[plt.Figure, plt.Axes]:
     """
     Plot the objective trajectory across global plotting indices.
@@ -54,7 +57,8 @@ def plot_cost_with_outer_boundaries(
     ax.plot(x_all, y_all, ".-")
     ax.set_xlabel("Global inner-loop iteration")
     ax.set_ylabel("Objective")
-    ax.set_title("Objective trace with outer-step boundaries", pad=16)
+    if title is not None:
+        ax.set_title(title, pad=title_pad, loc=title_loc)
 
     for trace in traces[:-1]:
         ax.axvline(trace.stop - 0.5, linestyle="--", linewidth=1)

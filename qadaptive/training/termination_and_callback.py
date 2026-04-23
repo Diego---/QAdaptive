@@ -4,10 +4,97 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import Literal
 from uncertainties.core import AffineScalarFunc
 
 logger = logging.getLogger(__name__)
+
+
+def _nominal_value(value: float | AffineScalarFunc) -> float:
+    """
+    Return the nominal float value.
+
+    Parameters
+    ----------
+    value : float or AffineScalarFunc
+        Scalar value that may carry uncertainty metadata.
+
+    Returns
+    -------
+    float
+        Nominal value as a Python float.
+    """
+    if isinstance(value, AffineScalarFunc):
+        return float(value.nominal_value)
+    return float(value)
+
+
+def _std_value(value: float | AffineScalarFunc) -> float:
+    """
+    Return the standard deviation if available.
+
+    Parameters
+    ----------
+    value : float or AffineScalarFunc
+        Scalar value that may carry uncertainty metadata.
+
+    Returns
+    -------
+    float
+        Standard deviation if present, otherwise 0.0.
+    """
+    if isinstance(value, AffineScalarFunc):
+        return float(value.std_dev)
+    return 0.0
+
+
+def _linear_slope(values: Sequence[float]) -> float:
+    """
+    Estimate the slope of a sequence using a linear fit.
+
+    Parameters
+    ----------
+    values : Sequence[float]
+        Window of scalar values.
+
+    Returns
+    -------
+    float
+        Slope of the best-fit line.
+    """
+    y = np.asarray(values, dtype=float)
+    if y.size < 2:
+        return 0.0
+    x = np.arange(y.size, dtype=float)
+    return float(np.polyfit(x, y, deg=1)[0])
+
+
+def _window_improvement(values: Sequence[float], mode: Literal["min", "max"]) -> float:
+    """
+    Compute the best improvement over a window.
+
+    Parameters
+    ----------
+    values : Sequence[float]
+        Window of objective values.
+    mode : {"min", "max"}
+        Whether the objective is being minimized or maximized.
+
+    Returns
+    -------
+    float
+        Best improvement over the window, expressed as a positive number
+        when progress was made.
+    """
+    y = np.asarray(values, dtype=float)
+    if y.size == 0:
+        return 0.0
+
+    if mode == "min":
+        return float(y[0] - np.min(y))
+    return float(np.max(y) - y[0])
+
 
 def create_live_plot_callback(
     counts: list[int], 
@@ -19,6 +106,7 @@ def create_live_plot_callback(
     extra_eval_freq: int | None = None,
     cost_extra: Callable | None = None,
     values_extra: list[float] | None = None,
+    gradient_norms: list[float] | None = None,
     plot: bool = True,
     use_epoch: bool = False
 ) -> Callable[[int, list[float], float, float, bool], None]:
@@ -46,81 +134,134 @@ def create_live_plot_callback(
         The extra cost function to be evaluated every extra_eval_freq iterations.
     values_extra : list[float], optional
         The array to store the values from the extra cost function.
+    gradient_norms : list[float] or None, optional
+        Storage for gradient norms, if gradient information is provided.
     plot : bool, optional
         Whether to do a live plot. Defaults to True.
     use_epoch : bool, optional
         Whether the callback is calculated on epoch end (True) or on iteration end (False). Defaults to False.
-
-    cost_extra : Callable, optional
-    values_extra : list[float], optional
     
     Returns
     -------
-    callback : Callable
-        A function that accepts the iteration count, parameters, mean value, step size, and acceptance status,
-        and stores this information.
+    Callable[..., None]
+        Callback function. It accepts the usual five positional arguments
+
+        `(eval_count, parameters, mean, stp_size, accepted)`
+
+        and may also accept an optional keyword argument `gradient`.
     """
     
     if extra_eval_freq is not None:
-        assert cost_extra is not None and values_extra is not None, "Must provide extra cost function and array in which to store extra values."
+        assert cost_extra is not None and values_extra is not None, (
+            "Must provide extra cost function and array in which to store extra values."
+        )
+        
+    if store_data and json_file_path is None:
+        raise ValueError("`json_file_path` must be provided when `store_data=True`.")
     
+    def _record_gradient(gradient: Sequence[float] | np.ndarray | None) -> None:
+        """
+        Record the norm of a gradient estimate.
+
+        Parameters
+        ----------
+        gradient : Sequence[float] or np.ndarray or None
+            Gradient-like object. If None, nothing is recorded.
+        """
+        if gradient is None or gradient_norms is None:
+            return
+
+        grad = np.asarray(gradient, dtype=float)
+        gradient_norms.append(float(np.linalg.norm(grad)))
+
     # Initialize the function with default behavior
-    def store_intermediate_result_plot_live(eval_count: int, parameters: list[float], mean: float, stp_size: float, accepted: bool):
+    def store_intermediate_result_plot_live(
+        eval_count: int, 
+        parameters: list[float], 
+        mean: float, 
+        stp_size: float, 
+        accepted: bool,
+        gradient: Sequence[float] | np.ndarray | None = None
+        ) -> None:
+        """
+        Store and visualize one callback record.
+
+        Parameters
+        ----------
+        eval_count : int
+            Iteration or epoch counter.
+        parameters : list[float]
+            Current parameter vector.
+        mean : float
+            Current objective value.
+        stp_size : float
+            Current optimizer step size.
+        accepted : bool
+            Whether the candidate step was accepted.
+        gradient : Sequence[float] or np.ndarray or None, optional
+            Gradient estimate associated with this callback event.
+        """
         if plot:
             clear_output(wait=True)  # Clears the previous output in the notebook
         
-        counts.append(eval_count)
-        values.append(mean)
-        params.append(parameters)
-        stepsize.append(stp_size)
+        counts.append(int(eval_count))
+        values.append(float(mean))
+        params.append(list(parameters))
+        stepsize.append(float(stp_size))
+        _record_gradient(gradient)
         
-        if extra_eval_freq is not None:
-            if len(counts) % extra_eval_freq == 0:
-                print("Extra cost evaluation with provided function.")
-                logger.info(f"Extra cost evaluation with provided function at parameters: {parameters}.")
-                value_extra = cost_extra(parameters)
-                logger.info(f"Value of extra evaluations was: {value_extra}")
-        
-                values_extra.append(value_extra)
+        if extra_eval_freq is not None and len(counts) % extra_eval_freq == 0:
+            logger.info("Extra cost evaluation with provided function at parameters: %s", parameters)
+            value_extra = cost_extra(parameters)
+            logger.info("Value of extra evaluation was: %s", value_extra)
+            values_extra.append(value_extra)
             
         progress_str = "Epoch" if use_epoch else "Iteration"
         
         # Store data in the file if global `store_data` flag is True
         if store_data:
-            with open(json_file_path, 'a') as json_file:
-                data = {
-                    progress_str: len(values),
-                    "Fidelity": -mean,
-                    "Params": tuple(parameters),
-                    "Time": str(datetime.datetime.now())
-                }
-                if not extra_eval_freq is None:
-                    data_extra = {"Fidelity Extra": values_extra[-1] if values_extra else 0}
-                    data.update(data_extra)
-                    
+            data = {
+                progress_str: int(eval_count),
+                "Objective": float(mean),
+                "Accepted": bool(accepted),
+                "Step size": float(stp_size),
+                "Params": tuple(parameters),
+                "Time": str(datetime.datetime.now()),
+            }
+            if gradient_norms is not None and gradient_norms:
+                data["Gradient norm"] = gradient_norms[-1]
+            if values_extra is not None and values_extra:
+                data["Extra objective"] = _nominal_value(values_extra[-1])
+
+            with open(json_file_path, "a", encoding="utf-8") as json_file:
                 json.dump(data, json_file)
-                json_file.write('\n')
-        
+                json_file.write("\n")
+
         if plot:
-            # Real-time plot
-            plt.title("Cost Evolution")
-            plt.xlabel(progress_str)
-            plt.ylabel(r'$F$')
-            plt.plot(range(len(values)), values, "b.")
-            if extra_eval_freq is not None and len(values_extra) > 0:
-                x_extra = [(2 * i) + 1 for i in range(len(values_extra))]
-                # Extract nominal values and error bars
-                y_extra = [v.nominal_value if isinstance(v, AffineScalarFunc) else v for v in values_extra]
-                yerr_extra = [v.std_dev if isinstance(v, AffineScalarFunc) else 0 for v in values_extra]
-                plt.errorbar(x_extra, y_extra, yerr=yerr_extra, fmt="r.", capsize=4, label="Hardware evals")
-                # Make sure these are NumPy arrays
-                x_extra = np.array(x_extra, dtype=float)
-                y_extra = np.array(y_extra, dtype=float)
-                yerr_extra = np.array(yerr_extra, dtype=float)
-                # Plot
-                plt.errorbar(x_extra, y_extra, yerr=yerr_extra, fmt="r.", capsize=2, label="Hardware evals")
+            fig, ax = plt.subplots(figsize=(7, 4))
+            ax.set_title("Cost Evolution")
+            ax.set_xlabel(progress_str)
+            ax.set_ylabel("Objective")
+            ax.plot(counts, values, "b.", label="Objective")
+
+            if extra_eval_freq is not None and values_extra is not None and len(values_extra) > 0:
+                x_extra = counts[extra_eval_freq - 1 :: extra_eval_freq][: len(values_extra)]
+                y_extra = [_nominal_value(v) for v in values_extra]
+                yerr_extra = [_std_value(v) for v in values_extra]
+
+                ax.errorbar(
+                    x_extra,
+                    y_extra,
+                    yerr=yerr_extra,
+                    fmt="r.",
+                    capsize=3,
+                    label="Extra evals",
+                )
+
+            ax.legend(loc="best")
             plt.show()
 
+    setattr(store_intermediate_result_plot_live, "record_gradient", _record_gradient)
     return store_intermediate_result_plot_live
 
 def create_callback_args(
@@ -129,189 +270,368 @@ def create_callback_args(
     extra_eval_freq: int | None = None,
     cost_extra: Callable | None = None,
     plot: bool = True,
-    use_epoch: bool = False
+    use_epoch: bool = False,
+    track_gradient_norm: bool = False,
 ) -> tuple[list[int], list[float], list[list[float]], list[float], dict]:
     """
-    Generate the arguments for create_live_plot_callback.
-    
+    Generate the arguments required by `create_live_plot_callback`.
+
     Parameters
     ----------
-    json_file_path : str, optional
-        Path to JSON file for storing data.
+    json_file_path : str or None, optional
+        Path to the JSONL file for storing callback data.
     store_data : bool, optional
-        Whether to store data. Defaults to False.
-    extra_eval_freq : int, optional
+        Whether to store callback data.
+    extra_eval_freq : int or None, optional
         Frequency of extra cost evaluations.
-    cost_extra : Callable, optional
+    cost_extra : Callable or None, optional
         Extra cost function to evaluate.
     plot : bool, optional
-        Whether to plot results. Defaults to True.
+        Whether to update plots.
     use_epoch : bool, optional
-        Whether to use epoch tracking. Defaults to False.
-    
+        Whether to label progress in epochs rather than iterations.
+    track_gradient_norm : bool, optional
+        Whether to allocate storage for gradient norms.
+
     Returns
     -------
     tuple
-        A tuple containing (counts, values, params, stepsize, kwargs_dict) ready for create_live_plot_callback.
+        Tuple containing `(counts, values, params, stepsize, kwargs_dict)`.
+        The returned kwargs dictionary can be unpacked into
+        `create_live_plot_callback(...)`.
     """
-    counts = []
-    values = []
-    params = []
-    stepsize = []
+    counts: list[int] = []
+    values: list[float] = []
+    params: list[list[float]] = []
+    stepsize: list[float] = []
     values_extra = [] if extra_eval_freq is not None else None
-    
+    gradient_norms = [] if track_gradient_norm else None
+
     kwargs = {
         "json_file_path": json_file_path,
         "store_data": store_data,
         "extra_eval_freq": extra_eval_freq,
         "cost_extra": cost_extra,
         "values_extra": values_extra,
+        "gradient_norms": gradient_norms,
         "plot": plot,
-        "use_epoch": use_epoch
+        "use_epoch": use_epoch,
     }
-    
+
     return counts, values, params, stepsize, kwargs
+
 
 class TerminationChecker:
     """
-    A termination checker class for optimization algorithms.
-    
-    This class allows checking whether the optimization should terminate based on either a target value
-    or stagnation (flat evolution) over a number of iterations. Stagnation checking is optional and can be enabled
-    by providing a `stagnation_tol` and `number_past_iterations`.
+    Termination checker for iterative optimization.
 
-    Parameters
-    ----------
-    target_value : float | None, optional
-        The target value the optimization aims to reach. The optimization terminates when the value is within
-        the given tolerance of the target value.
-    tol : float
-        The tolerance level for the target value, typically for convergence.
-    stagnation_tol : float | None, optional
-        The tolerance level for stagnation checking. The optimization terminates if the value does not
-        change beyond this tolerance over the last `number_past_iterations` iterations. Default is None (no stagnation check).
-    number_past_iterations : int | None, optional
-        The number of past iterations to consider when checking for stagnation. Default is None (no stagnation check).
+    This class supports four independent stopping criteria:
+
+    1. Reaching a target objective value.
+    2. Plateau detection: the objective slope is small and best improvement
+       over a recent window is negligible.
+    3. Noisy wandering: the recent window has high variance but little net
+       progress.
+    4. Gradient flattening: recent gradient norms remain small for long enough
+       and objective improvement over the same window is negligible.
 
     Attributes
     ----------
-    target_value : float
-        The target value the optimization aims to reach.
-    tol : float
-        The tolerance level for the target value.
-    stagnation_tol : float | None
-        The tolerance level for stagnation checking, or None if no stagnation check is enabled.
-    number_past_iterations : int | None
-        The number of past iterations to consider for stagnation, or None if no stagnation check is enabled.
     values : list[float]
-        The list of function values over iterations, used for stagnation checking.
+        History of objective values.
+    grad_norms : list[float]
+        History of gradient norms.
+    last_reason : str or None
+        Reason associated with the most recent termination event.
     """
 
     def __init__(
-        self, 
-        target_value: float | None = None, 
-        tol: float = 0.001, 
-        stagnation_tol: float = 0.001, 
-        number_past_iterations: int | None = None,
-        noisy_oscillation_tol: float | None = None,
-        number_past_iterations_oscillation: int | None = None,
-        ):
+        self,
+        mode: Literal["min", "max"] = "min",
+        target_value: float | None = None,
+        target_tol: float = 1e-3,
+        plateau_window: int | None = None,
+        plateau_slope_tol: float | None = None,
+        plateau_improvement_tol: float | None = None,
+        noisy_window: int | None = None,
+        noisy_std_tol: float | None = None,
+        noisy_slope_tol: float | None = None,
+        noisy_improvement_tol: float | None = None,
+        gradient_window: int | None = None,
+        gradient_norm_tol: float | None = None,
+        gradient_norm_std_tol: float | None = None,
+        gradient_improvement_tol: float | None = None,
+        verbose: bool = True,
+    ) -> None:
         """
         Initialize the TerminationChecker instance.
 
         Parameters
         ----------
-        target_value : float, optional
-            The target value the optimization aims to reach.
-        tol : float, optional
-            The tolerance for convergence to the target value.
-        stagnation_tol : float, optional
-            The threshold for stagnation checking.
-        number_past_iterations : int, optional
-            The number of past iterations to track for stagnation checking.
-        noisy_oscillation_tol : float, optional
-            The threshold for a noisy non-convergence checking.
-        number_past_iterations_oscillation : int, optional
-            The number of past iterations to track for non-convergence checking.
+        mode : {"min", "max"}, optional
+            Whether the objective is being minimized or maximized.
+        target_value : float or None, optional
+            Target objective value.
+        target_tol : float, optional
+            Tolerance used when checking proximity to `target_value`.
+        plateau_window : int or None, optional
+            Window size used for plateau detection.
+        plateau_slope_tol : float or None, optional
+            Threshold on the absolute slope of the objective over the plateau window.
+        plateau_improvement_tol : float or None, optional
+            Threshold on the best improvement over the plateau window.
+        noisy_window : int or None, optional
+            Window size used for noisy wandering detection.
+        noisy_std_tol : float or None, optional
+            Threshold on the standard deviation over the noisy window.
+        noisy_slope_tol : float or None, optional
+            Threshold on the absolute slope over the noisy window.
+        noisy_improvement_tol : float or None, optional
+            Threshold on the best improvement over the noisy window.
+        gradient_window : int or None, optional
+            Window size used for gradient-flattening detection.
+        gradient_norm_tol : float or None, optional
+            Threshold on the median gradient norm over the gradient window.
+        gradient_norm_std_tol : float or None, optional
+            Threshold on the standard deviation of gradient norms over the gradient window.
+        gradient_improvement_tol : float or None, optional
+            Threshold on the best objective improvement over the gradient window.
+        verbose : bool, optional
+            Whether to print stop messages in addition to logging them.
         """
-        self.target_value = target_value # Default to None (no convergence to target check)
-        self.tol = tol
-        self.stagnation_tol = stagnation_tol  # Default to None (no stagnation check)
-        self.number_past_iterations = number_past_iterations
-        self.noisy_oscillation_tol = noisy_oscillation_tol
-        self.number_past_iterations_oscillation = number_past_iterations_oscillation
-        self.values: list[float] = []
 
-    def __call__(self, nfev: int, parameters: list[float], value: float, stepsize: float, accepted: bool) -> bool:
+        if mode not in {"min", "max"}:
+            raise ValueError("`mode` must be either 'min' or 'max'.")
+
+        for name, window in (
+            ("plateau_window", plateau_window),
+            ("noisy_window", noisy_window),
+            ("gradient_window", gradient_window),
+        ):
+            if window is not None and window < 2:
+                raise ValueError(f"`{name}` must be >= 2.")
+        
+        for name, tol in (
+            ("target_tol", target_tol),
+            ("plateau_slope_tol", plateau_slope_tol),
+            ("plateau_improvement_tol", plateau_improvement_tol),
+            ("noisy_std_tol", noisy_std_tol),
+            ("noisy_slope_tol", noisy_slope_tol),
+            ("noisy_improvement_tol", noisy_improvement_tol),
+            ("gradient_norm_tol", gradient_norm_tol),
+            ("gradient_norm_std_tol", gradient_norm_std_tol),
+            ("gradient_improvement_tol", gradient_improvement_tol),
+        ):
+            if tol is not None and tol < 0:
+                raise ValueError(f"`{name}` must be non-negative.")
+            
+        self.mode = mode
+        self.target_value = target_value
+        self.target_tol = target_tol
+        
+        self.plateau_window = plateau_window
+        self.plateau_slope_tol = plateau_slope_tol
+        self.plateau_improvement_tol = plateau_improvement_tol
+
+        self.noisy_window = noisy_window
+        self.noisy_std_tol = noisy_std_tol
+        self.noisy_slope_tol = noisy_slope_tol
+        self.noisy_improvement_tol = noisy_improvement_tol
+
+        self.gradient_window = gradient_window
+        self.gradient_norm_tol = gradient_norm_tol
+        self.gradient_norm_std_tol = gradient_norm_std_tol
+        self.gradient_improvement_tol = gradient_improvement_tol
+
+        self.verbose = verbose
+
+        self.values: list[float] = []
+        self.grad_norms: list[float] = []
+        self.last_reason: str | None = None
+
+    @staticmethod
+    def _window_slope(values: list[float]) -> float:
+        """Return the slope of a linear fit over the supplied window."""
+        y = np.asarray(values, dtype=float)
+        x = np.arange(len(y), dtype=float)
+        return float(np.polyfit(x, y, 1)[0])
+
+    def _window_improvement(self, values: list[float]) -> float:
         """
-        Check whether the optimization should terminate based on current optimization step.
+        Return best improvement over the window as a positive number.
+
+        For minimization:
+            first_value - min(window)
+
+        For maximization:
+            max(window) - first_value
+        """
+        y = np.asarray(values, dtype=float)
+        if self.mode == "min":
+            return float(y[0] - np.min(y))
+        return float(np.max(y) - y[0])
+
+    def update_gradient(self, gradient: list[float] | np.ndarray | None) -> None:
+        """
+        Record gradient norm for gradient-flattening checks.
+
+        Parameters
+        ----------
+        gradient : list[float] | np.ndarray | None
+            Gradient estimate. If None, nothing is recorded.
+        """
+        if gradient is None:
+            return
+
+        grad = np.asarray(gradient, dtype=float)
+        self.grad_norms.append(float(np.linalg.norm(grad)))
+
+    def _stop(self, reason: str, message: str) -> bool:
+        self.last_reason = reason
+        logger.info(message)
+        if self.verbose:
+            print(message)
+        return True
+
+    def __call__(
+        self,
+        nfev: int,
+        parameters: list[float],
+        value: float,
+        stepsize: float,
+        accepted: bool,
+    ) -> bool:
+        """
+        Check whether optimization should terminate.
 
         Parameters
         ----------
         nfev : int
-            The number of function evaluations.
+            Number of function evaluations.
         parameters : list[float]
-            The current parameters of the optimization.
+            Current parameter vector.
         value : float
-            The current value of the objective function.
+            Current objective value.
         stepsize : float
-            The current step size used in the optimization.
+            Current step size.
         accepted : bool
-            Whether the current iteration was accepted.
+            Whether the current step was accepted.
 
         Returns
         -------
         bool
-            True if termination criteria are met (either convergence or stagnation), False otherwise.
+            True if a stopping criterion is met, False otherwise.
         """
-        self.values.append(value)
-        
-        # Check if the target value is reached within tolerance
-        if self.target_value is not None:
-            if abs(self.target_value - value) < self.tol:
-                logger.info(f"Reached target value within tolerance: {self.target_value}")
-                print(f"Reached target value within tolerance: {self.target_value}")
-                return True
-        
-        # If stagnation check is enabled, calculate the average of the last `number_past_iterations` values
-        if self.stagnation_tol is not None and self.number_past_iterations is not None:
-            stagnation_tol_std = self.stagnation_tol * 0.5
-            if len(self.values) >= 0:
-                last_values = self.values[-self.number_past_iterations:]
-                last_few_av = np.mean(last_values)
-                std_dev = np.std(last_values)
-            
-            # Check for stagnation over the last `number_past_iterations` values
-            if len(self.values) > self.number_past_iterations and abs(value - last_few_av) < self.stagnation_tol:
-                if std_dev < stagnation_tol_std:
-                    logger.info("Stagnating Optimization. Average of last few iterations is " + 
-                                f"{last_few_av}, standard deviation of last few values is: {std_dev}")
-                    logger.info(f"Current value is {value}")
-                    print("Stagnating Optimization. Average of last few iterations is " + 
-                          f"{last_few_av}, standard deviation of last few values is: {std_dev}")
-                    print(f"Current value is {value}")
-                    return True
-                
-        # Check for non-converging noisy oscillations
-        if self.noisy_oscillation_tol is not None and self.number_past_iterations_oscillation is not None:
-            if len(self.values) > self.number_past_iterations_oscillation:
-                recent = self.values[-self.number_past_iterations_oscillation:]
-                std_dev = np.std(recent)
-                mean_diff = recent[-1] - recent[0]  # Trend: positive = getting worse
+        del nfev, parameters, stepsize, accepted
 
-                if std_dev > self.noisy_oscillation_tol:
-                    logger.info("Detected noisy optimization with no convergence.")
-                    logger.info(f"Standard deviation: {std_dev}, trend (Δ): {mean_diff}")
-                    print("Detected noisy optimization with no convergence.")
-                    print(f"Standard deviation: {std_dev}, trend (Δ): {mean_diff}")
-                    return True        
+        value = float(value)
+        self.values.append(value)
+        self.last_reason = None
+
+        # Target-value convergence
+        if self.target_value is not None:
+            if abs(self.target_value - value) < self.target_tol:
+                return self._stop(
+                    "target_reached",
+                    f"Reached target value within tolerance: {self.target_value}",
+                )
+
+        # Plateau detection
+        if (
+            self.plateau_window is not None
+            and self.plateau_slope_tol is not None
+            and self.plateau_improvement_tol is not None
+            and len(self.values) >= self.plateau_window
+        ):
+            recent = self.values[-self.plateau_window :]
+            slope = self._window_slope(recent)
+            improvement = self._window_improvement(recent)
+
+            if abs(slope) < self.plateau_slope_tol and improvement < self.plateau_improvement_tol:
+                return self._stop(
+                    "plateau",
+                    (
+                        "Detected plateau: "
+                        f"slope={slope:.6g}, "
+                        f"best_improvement={improvement:.6g}, "
+                        f"window={self.plateau_window}"
+                    ),
+                )
+
+        # Noisy wandering detection
+        if (
+            self.noisy_window is not None
+            and self.noisy_std_tol is not None
+            and self.noisy_slope_tol is not None
+            and self.noisy_improvement_tol is not None
+            and len(self.values) >= self.noisy_window
+        ):
+            recent = self.values[-self.noisy_window :]
+            std_dev = float(np.std(recent))
+            slope = self._window_slope(recent)
+            improvement = self._window_improvement(recent)
+
+            if (
+                std_dev > self.noisy_std_tol
+                and abs(slope) < self.noisy_slope_tol
+                and improvement < self.noisy_improvement_tol
+            ):
+                return self._stop(
+                    "noisy_wandering",
+                    (
+                        "Detected noisy wandering: "
+                        f"std={std_dev:.6g}, "
+                        f"slope={slope:.6g}, "
+                        f"best_improvement={improvement:.6g}, "
+                        f"window={self.noisy_window}"
+                    ),
+                )
+
+        # Gradient flattening detection
+        if (
+            self.gradient_window is not None
+            and self.gradient_norm_tol is not None
+            and len(self.grad_norms) >= self.gradient_window
+            and len(self.values) >= self.gradient_window
+        ):
+            recent_grad_norms = np.asarray(
+                self.grad_norms[-self.gradient_window :], dtype=float
+            )
+            recent_values = self.values[-self.gradient_window :]
+
+            grad_median = float(np.median(recent_grad_norms))
+            grad_std = float(np.std(recent_grad_norms))
+            improvement = self._window_improvement(recent_values)
+
+            flat_enough = grad_median < self.gradient_norm_tol
+            stable_enough = (
+                True
+                if self.gradient_norm_std_tol is None
+                else grad_std < self.gradient_norm_std_tol
+            )
+            little_progress = (
+                True
+                if self.gradient_improvement_tol is None
+                else improvement < self.gradient_improvement_tol
+            )
+
+            if flat_enough and stable_enough and little_progress:
+                return self._stop(
+                    "gradient_flattening",
+                    (
+                        "Detected gradient flattening: "
+                        f"median_grad_norm={grad_median:.6g}, "
+                        f"std_grad_norm={grad_std:.6g}, "
+                        f"best_improvement={improvement:.6g}, "
+                        f"window={self.gradient_window}"
+                    ),
+                )
 
         return False
-    
+
     def reset(self) -> None:
-        """
-        Reset the termination checker by clearing the stored values.
-        This can be used to start a new optimization run without creating a new instance.
-        """
+        """Reset stored histories and last stop reason."""
         logger.info("Resetting termination checker for new optimization run.")
         self.values.clear()
+        self.grad_norms.clear()
+        self.last_reason = None

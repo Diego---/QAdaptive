@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from typing import Any, Callable, TYPE_CHECKING
 
 from qadaptive.outer.action_definitions import INSERT_BLOCK, SIMPLIFY, PRUNE_TWO_QUBIT
@@ -17,29 +18,82 @@ if TYPE_CHECKING:
     from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
 
 
-def default_append_index_policy(experiment, target, insertion_number: int) -> int:
+def default_append_index_policy(experiment, _target, _insertion_number: int) -> int:
     """Insert at the end of the current circuit."""
     return len(experiment.ansatz.data)
 
-def random_insert_index_policy(experiment, target, insertion_number: int) -> int:
+def random_insert_index_policy(experiment, _target, _insertion_number: int) -> int:
     """Insert at a random circuit-data index."""
     num_indices = len(experiment.ansatz.data)
     return random.randint(0, num_indices)
 
 def between_2qg_indices_policy(experiment, target, insertion_number: int) -> int:
     """
-    Insert at a random index between a random pair of consecutive two-qubit gates.
+    Insert between consecutive relevant two-qubit gates, distributing repeated
+    insertions across available windows.
 
-    If there are fewer than two two-qubit gates, append at the end.
+    Relevance is defined with respect to the target qubit(s): only two-qubit
+    gates acting on at least one target qubit are considered.
+
+    Candidate windows are ranked by the number of instructions between the two
+    relevant consecutive two-qubit gates, with smaller gaps preferred.
+    Repeated insertions are distributed across ranked windows using
+    `insertion_number`, so they do not all accumulate in the same place.
+
+    If there are fewer than two relevant two-qubit gates, append at the end.
     """
-    two_q_indices = sorted(experiment._2qbg_positions.keys())
+    if isinstance(target, int):
+        target_qubits = {target}
+    elif isinstance(target, Iterable):
+        target_qubits = set(target)
+    else:
+        raise TypeError("`target` must be an int or an iterable of ints.")
 
-    if len(two_q_indices) < 2:
+    # Keep only 2Q gates touching the target qubit(s).
+    relevant_2q = [
+        (circ_index, pair)
+        for circ_index, pair in sorted(experiment._2qbg_positions.items())
+        if any(q in target_qubits for q in pair)
+    ]
+
+    if len(relevant_2q) < 2:
         return len(experiment.ansatz.data)
 
-    left_index = random.choice(two_q_indices[:-1])
-    right_index = two_q_indices[two_q_indices.index(left_index) + 1]
+    # Build windows between consecutive relevant 2Q gates.
+    candidate_windows = []
+    for (left_index, left_pair), (right_index, right_pair) in zip(
+        relevant_2q[:-1], relevant_2q[1:]
+    ):
+        gap = right_index - left_index - 1
+        candidate_windows.append((gap, left_index, right_index, left_pair, right_pair))
+
+    # Rank by smallest gap first.
+    candidate_windows.sort(key=lambda x: x[0])
+
+    # Distribute insertions across windows instead of always taking the first.
+    selected_idx = insertion_number % len(candidate_windows)
+    _, left_index, right_index, _, _ = candidate_windows[selected_idx]
+
+    # Choose a position within that window.
     return random.randint(left_index + 1, right_index)
+
+def combine_plan_builders(*builders: Callable[..., OuterStepPlan]) -> Callable[..., OuterStepPlan]:
+    """
+    Return a builder that combines the plans produced by all input builders.
+
+    Any positional or keyword arguments received by the combined builder are
+    forwarded to each underlying builder.
+    """
+    if not builders:
+        raise ValueError("At least one builder must be provided.")
+
+    def _combined_builder(*args, **kwargs) -> OuterStepPlan:
+        plan = builders[0](*args, **kwargs)
+        for builder in builders[1:]:
+            plan = plan + builder(*args, **kwargs)
+        return plan
+
+    return _combined_builder
 
 def build_nearest_neighbor_growth_plan(
     experiment: MutableAnsatzExperiment,
@@ -158,12 +212,110 @@ def build_nearest_neighbor_growth_plan(
         acceptance_mode="force" if force_accept else "outer",
         label=label,
     )
+    
+def build_three_qubit_block_growth_plan(
+    experiment: MutableAnsatzExperiment,
+    block_name: str = "big_cz_identity",
+    qubits: list[int] | None = None,
+    max_insertions: int = 1,
+    repetitions: int = 1,
+    insert_index_policy: Callable | None = None,
+    force_accept: bool = False,
+    add_simplify: bool = True,
+    simplify_kwargs: dict[str, Any] | None = None,
+    label: str | None = None,
+) -> OuterStepPlan:
+    """
+    Build a macro-plan that grows three-qubit entangling structure across selected triplets.
+    
+    The plan inserts identity-initialized three-qubit blocks on selected triplets of qubits, then
+    optionally appends a simplification action.
+    
+    Parameters
+    ----------
+    experiment : MutableAnsatzExperiment
+        Experiment instance used to access the experiment state.
+    block_name : str, optional
+        Name of the block to insert for each selected triplet.
+    qubits : list[int] | None, optional
+        List of qubits to consider for three-qubit block insertion. If None, all qubits are considered.
+    max_insertions : int, optional
+        Maximum number of three-qubit block insertions to include in the plan. Default is 1.
+    repetitions : int, optional
+        Number of times to repeat the three-qubit growth pattern. Default is 1.
+    insert_index_policy : Callable | None, optional
+        Function that determines the circuit-data index for each insertion. It should have the signature
+        ``(experiment, target_qubits, insertion_number) -> int``. If None, a default policy that appends at the end of the circuit is used.
+    force_accept : bool, optional
+        Whether to set the acceptance mode to "force", which accepts all changes made by the plan without evaluating the cost.
+    add_simplify : bool, optional
+        Whether to append a simplification action after the insertion burst.
+    simplify_kwargs : dict[str, Any] | None, optional
+        Keyword arguments for the simplification action.
+    label : str | None, optional
+        Optional descriptive label for the plan.
+        
+    Returns
+    -------
+    OuterStepPlan
+        Three-qubit block growth plan.
+    """
+    if insert_index_policy is None:
+        insert_index_policy = default_append_index_policy
+        
+    num_qubits = experiment.ansatz.num_qubits
+    if num_qubits < 3:
+        raise ValueError("`num_qubits` must be at least 3 for three-qubit block growth.")
+    
+    if num_qubits == 3 and qubits is None:
+        triplet = [n for n in range(num_qubits)]
+    elif qubits is not None:
+        assert len(qubits) == 3, "Exactly three qubits must be specified for three-qubit block insertion."
+        triplet = qubits.copy()
+    else:
+        triplet = random.sample(range(num_qubits), 3)
+        
+    actions: list[ActionSpec] = []
+    insertion_number = 0
+    for _ in range(repetitions):
+        if insertion_number >= max_insertions:
+            break
+        actions.append(
+            ActionSpec(
+                action=INSERT_BLOCK,
+                kwargs={
+                    "block_name": block_name,
+                    "qubits": triplet,
+                    "insert_policy": insert_index_policy,
+                    "insertion_number": insertion_number,
+                },
+                label=f"{block_name}_{'_'.join(map(str, triplet))}",
+            )
+        )
+        insertion_number += 1
+        
+    if add_simplify:
+        actions.append(
+            ActionSpec(
+                action=SIMPLIFY,
+                kwargs={} if simplify_kwargs is None else dict(simplify_kwargs),
+                label="simplify_after_3q_growth",
+            )
+        )
+        
+    return OuterStepPlan(
+        name="three_qubit_block_growth",
+        actions=actions,
+        acceptance_mode="force" if force_accept else "outer",
+        label=label,
+    )
 
 def build_star_growth_plan(
     experiment: MutableAnsatzExperiment,
     center_qubit: int = 0,
     block_name: str = "cx_identity",
     max_insertions: int = 2,
+    repetitions: int = 1,
     insert_index_policy: Callable | None = None,
     force_accept: bool = False,
     allowed_targets: list[int] | None = None,
@@ -192,6 +344,8 @@ def build_star_growth_plan(
         Name of the block to insert for each selected pair.
     max_insertions : int, optional
         Maximum number of block insertions to include in the plan.
+    repetitions : int, optional
+        Number of times to repeat the star-growth pattern.
     insert_index_policy : Callable | None, optional
         Function that determines the circuit-data index for each insertion.
         It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
@@ -241,25 +395,24 @@ def build_star_growth_plan(
     
     actions: list[ActionSpec] = []
 
-    for insertion_number, target in enumerate(targets):
-        target_qubits = [center_qubit, target]
-        circ_ind = insert_index_policy(
-            experiment,
-            target_qubits,
-            insertion_number,
-        )
-
-        actions.append(
-            ActionSpec(
-                action=INSERT_BLOCK,
-                kwargs={
-                    "block_name": block_name,
-                    "qubits": target_qubits,
-                    "circ_ind": circ_ind,
-                },
-                label=f"{block_name}_{center_qubit}_{target}",
+    insertion_number = 0
+    
+    for _ in range(repetitions):
+        for target in targets:
+            target_qubits = [center_qubit, target]
+            actions.append(
+                ActionSpec(
+                    action=INSERT_BLOCK,
+                    kwargs={
+                        "block_name": block_name,
+                        "qubits": target_qubits,
+                        "insert_policy": insert_index_policy,
+                        "insertion_number": insertion_number,
+                    },
+                    label=f"{block_name}_{center_qubit}_{target}",
+                )
             )
-        )
+            insertion_number += 1
 
     if add_simplify:
         actions.append(
@@ -343,7 +496,8 @@ def build_uniform_growth_plan(
                     kwargs={
                         "block_name": block_name,
                         "qubits": [q1, q2],
-                        "circ_ind": circ_ind,
+                        "insert_policy": insert_index_policy,
+                        "insertion_number": insertion_number,
                     },
                     label=f"{block_name}_{q1}_{q2}",
                 )
@@ -371,6 +525,7 @@ def build_single_qubit_block_plan(
     block_name: str = "rz_rx_rz",
     qubits: list[int] | None = None,
     insert_index_policy: Callable | None = None,
+    num_insertions: int = 1,
     force_accept: bool = False,
     add_simplify: bool = True,
     simplify_kwargs: dict[str, Any] | None = None,
@@ -394,6 +549,8 @@ def build_single_qubit_block_plan(
         Function that determines the circuit-data index for each insertion.
         It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
         If None, a default policy that appends at the end of the circuit is used.
+    num_insertions : int, optional
+        Number of blocks to insert on each selected qubit. Default is 1.
     force_accept : bool, optional
         Whether to set the acceptance mode to "force", which accepts all changes
         made by the plan without evaluating the cost.
@@ -423,26 +580,30 @@ def build_single_qubit_block_plan(
         insert_index_policy = default_append_index_policy
 
     actions: list[ActionSpec] = []
+    
+    insertion_number = 0
 
-    for insertion_number, qubit in enumerate(qubits):
-        if qubit < 0 or qubit >= num_qubits:
-            raise ValueError(
-                f"Qubit index {qubit} is invalid for a {num_qubits}-qubit ansatz."
+    for _ in range(num_insertions):
+        for qubit in qubits:
+            if qubit < 0 or qubit >= num_qubits:
+                raise ValueError(
+                    f"Qubit index {qubit} is invalid for a {num_qubits}-qubit ansatz."
+                )
+
+            target_qubits = [qubit]
+            actions.append(
+                ActionSpec(
+                    action=INSERT_BLOCK,
+                    kwargs={
+                        "block_name": block_name,
+                        "qubits": target_qubits,
+                        "insert_policy": insert_index_policy,
+                        "insertion_number": insertion_number,
+                    },
+                    label=f"{block_name}_{qubit}",
+                )
             )
-
-        circ_ind = insert_index_policy(experiment, qubit, insertion_number)
-
-        actions.append(
-            ActionSpec(
-                action=INSERT_BLOCK,
-                kwargs={
-                    "block_name": block_name,
-                    "qubits": [qubit],
-                    "circ_ind": circ_ind,
-                },
-                label=f"{block_name}_{qubit}",
-            )
-        )
+            insertion_number += 1
 
     if add_simplify:
         actions.append(
@@ -500,9 +661,6 @@ def build_simplification_plan(
 def build_prune_sweep_plan(
     experiment: MutableAnsatzExperiment,
     gate_indices: list[int] | None = None,
-    temperature: float = 0.08,
-    alpha: float = 0.1,
-    accept_tol: float = 0.2,
     label: str | None = None,
     add_simplify: bool = False,
     simplify_kwargs: dict[str, Any] | None = None,
@@ -523,14 +681,12 @@ def build_prune_sweep_plan(
     gate_indices : list[int] | None, optional
         Circuit-data indices of two-qubit gates to consider in the sweep.
         If None, all currently present two-qubit gates are used.
-    temperature : float, optional
-        Temperature parameter passed to the pruning routine.
-    alpha : float, optional
-        Locking-probability scaling parameter passed to the pruning routine.
-    accept_tol : float, optional
-        Acceptance tolerance passed to the pruning routine.
     label : str | None, optional
         Optional descriptive label for the plan.
+    add_simplify : bool, optional
+        Whether to append a simplification action after the prune sweep.
+    simplify_kwargs : dict[str, Any] | None, optional
+        Keyword arguments for the simplification action.
 
     Returns
     -------
@@ -561,14 +717,11 @@ def build_prune_sweep_plan(
                 kwargs={
                     "target_occurrence": occurrence,
                     "target_pair": pair,
-                    "temperature": temperature,
-                    "alpha": alpha,
-                    "accept_tol": accept_tol,
                 },
                 label=f"prune_{pair}_{occurrence}",
             )
         )
-        
+
     if add_simplify:
         actions.append(
             ActionSpec(
@@ -581,24 +734,21 @@ def build_prune_sweep_plan(
     return OuterStepPlan(
         name="prune_sweep",
         actions=actions,
-        acceptance_mode="internal",
+        acceptance_mode="outer",
         label=label,
     )
 
 def build_targeted_prune_plan(
     experiment: MutableAnsatzExperiment,
     targeting_function: Callable[[MutableAnsatzExperiment], TwoQMap] | None = None,
-    max_targets: int = 1,
-    temperature: float = 0.08,
-    alpha: float = 0.1,
-    accept_tol: float = 0.2,
+    max_num_2q_gates: int = 1,
     label: str | None = None,
     add_simplify: bool = False,
     simplify_kwargs: dict[str, Any] | None = None,
 ) -> OuterStepPlan:
     """
-    Build a macro-plan that performs targeted prune attempts on selected
-    two-qubit gates.
+    Build a macro-plan that performs targeted structural prune proposals on
+    selected two-qubit gates.
 
     The targeted gates are stored in the plan using stable pair-occurrence
     identifiers rather than raw circuit-data indices, so that later actions in
@@ -619,15 +769,9 @@ def build_targeted_prune_plan(
 
         If None, a default targeting function is used that selects all gates
         belonging to the most frequent two-qubit pair.
-    max_targets : int, optional
+    max_num_2q_gates : int, optional
         Maximum number of targeted two-qubit gates to include in the plan.
         Defaults to a single gate.
-    temperature : float, optional
-        Temperature parameter passed to the pruning routine.
-    alpha : float, optional
-        Locking-probability scaling parameter passed to the pruning routine.
-    accept_tol : float, optional
-        Acceptance tolerance passed to the pruning routine.
     label : str | None, optional
         Optional descriptive label for the plan.
     add_simplify : bool, optional
@@ -639,17 +783,18 @@ def build_targeted_prune_plan(
     Returns
     -------
     OuterStepPlan
-        Plan that performs targeted prune attempts in internal-acceptance mode.
+        Plan that performs targeted structural prune proposals.
 
     Raises
     ------
     ValueError
         If there are no tracked two-qubit gates, if the targeting function
-        returns no gates, if it returns invalid indices/pairs, or if
-        `max_num_2q_gates` is not positive.
+        returns no gates, if it returns invalid indices/pairs, if
+        ``max_num_2q_gates`` is not positive, or if ``acceptance_mode`` is
+        invalid.
     """
-    if max_targets <= 0:
-        raise ValueError("`max_num_2q_gates` must be positive if provided.")
+    if max_num_2q_gates <= 0:
+        raise ValueError("`max_num_2q_gates` must be positive.")
 
     current_two_q_map = dict(experiment._2qbg_positions)
 
@@ -676,10 +821,17 @@ def build_targeted_prune_plan(
                 f"expected {current_two_q_map[circ_ind]}, got {pair}."
             )
 
-    selected_indices = sorted(targeted_map.keys())
+    # Filter out locked targets before applying the cap.
+    available_indices = [
+        circ_ind
+        for circ_ind in sorted(targeted_map.keys())
+        if not experiment._is_locked_circuit_index(circ_ind)
+    ]
 
-    if max_targets is not None:
-        selected_indices = selected_indices[:max_targets]
+    if not available_indices:
+        raise ValueError("All targeted two-qubit gates are currently locked.")
+
+    selected_indices = available_indices[:max_num_2q_gates]
 
     actions: list[ActionSpec] = []
 
@@ -692,9 +844,6 @@ def build_targeted_prune_plan(
                 kwargs={
                     "target_occurrence": occurrence,
                     "target_pair": pair,
-                    "temperature": temperature,
-                    "alpha": alpha,
-                    "accept_tol": accept_tol,
                 },
                 label=f"targeted_prune_{pair}_{occurrence}",
             )
@@ -712,6 +861,6 @@ def build_targeted_prune_plan(
     return OuterStepPlan(
         name="targeted_prune",
         actions=actions,
-        acceptance_mode="internal",
+        acceptance_mode="outer",
         label=label,
     )

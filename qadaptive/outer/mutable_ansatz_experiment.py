@@ -23,7 +23,7 @@ from qadaptive.core.mutation import (
     TwoQMap
 )
 from qadaptive.core.simplification import simplify_ansatz
-from qadaptive.core.pruning import evaluate_two_qubit_gate_pruning
+from qadaptive.core.pruning import make_two_qubit_pruning_proposal, PruningProposal
 from qadaptive.outer.action_definitions import (
     INSERT_RANDOM_GATE,
     INSERT_GATE,
@@ -203,6 +203,7 @@ class MutableAnsatzExperiment:
     ) -> None:
         """Rebuild the optimizer callback and reset optimizer iteration for the next inner-loop run."""
         if callback_builder is None:
+            logger.warning("Optimizer does not have a callback builder. Skipping callback reset.")
             return
 
         callback_args = create_callback_args(
@@ -213,6 +214,8 @@ class MutableAnsatzExperiment:
             plot=callback_kwargs.get("plot", True),
             use_epoch=callback_kwargs.get("use_epoch", False),
         )
+        
+        logger.info("Setting new optimizer callback function with args: %s.", callback_args)
 
         new_callback = callback_builder(**callback_args)
         self.reset_optimizer_callback(new_callback)
@@ -871,6 +874,8 @@ class MutableAnsatzExperiment:
         store_initial_value_in_history: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
+        metropolis_temperature: float | None = None,
+        metropolis_rng: np.random.Generator | None = None,
         **train_kwargs,
     ) -> OuterStepResult:
         """
@@ -924,6 +929,13 @@ class MutableAnsatzExperiment:
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
             Optional penalty added to the objective when deciding acceptance in
             `acceptance_mode="outer"`.
+        metropolis_temperature : float | None, optional
+            Temperature parameter for Metropolis-like acceptance of proposals that
+            do not satisfy the deterministic acceptance threshold. If None or
+            non-positive, acceptance remains deterministic.
+        metropolis_rng : np.random.Generator | None, optional
+            Random-number generator used for Metropolis acceptance. If None, a new
+            default generator is created when needed.
         **train_kwargs
             Additional keyword arguments forwarded to `train_one_time`.
 
@@ -1049,6 +1061,8 @@ class MutableAnsatzExperiment:
                     complexity_penalty=complexity_penalty,
                     ansatz_before=ansatz_before,
                     ansatz_after=ansatz_after,
+                    metropolis_temperature=metropolis_temperature,
+                    metropolis_rng=metropolis_rng,
                 )
                 note = None
             else:
@@ -1146,7 +1160,7 @@ class MutableAnsatzExperiment:
                 
             self._record_accepted_ansatz(
                     action=plan.display_name,
-                    cost=None,
+                    cost=cost_after,
                     note=note
                 )
             
@@ -1192,7 +1206,7 @@ class MutableAnsatzExperiment:
         loss_function: Callable[[np.ndarray], float],
         plan_schedule: list[Callable[["MutableAnsatzExperiment"], OuterStepPlan]],
         outer_iterations: int | None = None,
-        train_iterations: int = 100,
+        train_iterations: int | list[int] = 100,
         train_before_first_plan: bool = True,
         initial_point: list | np.ndarray | None = None,
         initial_point_generator: Callable[..., np.ndarray] | None = None,
@@ -1209,6 +1223,8 @@ class MutableAnsatzExperiment:
         store_initial_value_in_history: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
+        metropolis_temperature: float | None = None,
+        metropolis_rng: np.random.Generator | None = None,
         stop_on_error: bool = True,
         **train_kwargs,
     ) -> list[OuterStepResult]:
@@ -1227,8 +1243,10 @@ class MutableAnsatzExperiment:
         outer_iterations : int | None, optional
             Number of outer-loop steps to execute. If None, the schedule length is
             used.
-        train_iterations : int, optional
+        train_iterations : int | list[int], optional
             Number of inner-loop optimization steps after each executed plan.
+            Can be constant for all outer-loop iterations or specified as a list 
+            of the same length as `outer_iterations`
         train_before_first_plan : bool, optional
             Whether to perform an initial training phase before executing the first plan.
         initial_point : list | np.ndarray | None, optional
@@ -1273,6 +1291,13 @@ class MutableAnsatzExperiment:
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
             Optional penalty added to the objective in generic outer acceptance.
+        metropolis_temperature : float | None, optional
+            Temperature parameter for Metropolis-like acceptance of proposals that
+            do not satisfy the deterministic acceptance threshold. If None or
+            non-positive, acceptance remains deterministic.
+        metropolis_rng : np.random.Generator | None, optional
+            Random-number generator used for Metropolis acceptance. If None, a new
+            default generator is created when needed.
         stop_on_error : bool, optional
             If True, raise immediately when a plan builder or outer step fails.
             If False, log the exception and stop the loop.
@@ -1306,10 +1331,15 @@ class MutableAnsatzExperiment:
             len(plan_schedule),
         )
         
-        if train_before_first_plan and self._outer_iteration == 0:     
+        train_iterations_list: list[int] = train_iterations.copy() if isinstance(train_iterations, list) else [train_iterations] * outer_iterations
+        if train_before_first_plan:
+            train_iterations_list = [train_iterations_list[0]] + train_iterations_list  # Add an initial training phase before the first plan if requested
+        
+        if train_before_first_plan and self._outer_iteration == 0:
+            current_train_iterations = train_iterations_list.pop(0)    
             logger.info(
                 "Training before first plan execution for %d inner-loop iterations.",
-                train_iterations,
+                current_train_iterations,
             )
             
             if initial_point is None:
@@ -1331,7 +1361,7 @@ class MutableAnsatzExperiment:
                 loss_function=loss_function,
                 initial_point=initial_point,
                 loss_next=loss_next,
-                iterations=train_iterations,
+                iterations=current_train_iterations,
                 update_parameter_memory=update_parameter_memory,
                 trainer_iteration_reset=trainer_iteration_reset,
                 record_run_history=record_run_history,
@@ -1343,6 +1373,8 @@ class MutableAnsatzExperiment:
                 callback_builder,
                 **({} if callback_kwargs is None else callback_kwargs)
                 ) # Will only reset if callback_builder is not None
+            
+            self._reset_inner_loop_termination_checker()
             
             if record_parameter_memory:
                 self._record_parameter_memory(
@@ -1402,12 +1434,14 @@ class MutableAnsatzExperiment:
                 plan.display_name,
                 self._outer_iteration,
             )
+            
+            current_train_iterations = train_iterations_list.pop(0)
 
             try:
                 result = self.run_outer_step(
                     loss_function=loss_function,
                     plan=plan,
-                    train_iterations=train_iterations,
+                    train_iterations=current_train_iterations,
                     initial_point_generator=initial_point_generator,
                     loss_next=loss_next,
                     train_after_plan=train_after_plan,
@@ -1422,6 +1456,8 @@ class MutableAnsatzExperiment:
                     store_initial_value_in_history=store_initial_value_in_history,
                     accept_tol=accept_tol,
                     complexity_penalty=complexity_penalty,
+                    metropolis_temperature=metropolis_temperature,
+                    metropolis_rng=metropolis_rng,
                     **train_kwargs,
                 )
             except Exception:
@@ -1521,11 +1557,16 @@ class MutableAnsatzExperiment:
         )
 
     def _action_insert_block(self, **kwargs) -> None:
-        """Insert a specified block at a given circuit index."""
+        """Insert a specified block, resolving the insertion index at execution time."""
+        insert_policy = kwargs["insert_policy"]
+        insertion_number = kwargs["insertion_number"]
+        qubits = kwargs["qubits"]
+        circ_ind = insert_policy(self, qubits, insertion_number)
+
         self.insert_block_at(
             block_name=kwargs["block_name"],
-            qubits=kwargs["qubits"],
-            circ_ind=kwargs["circ_ind"],
+            qubits=qubits,
+            circ_ind=circ_ind,
         )
 
     def _action_remove_gate(self, **kwargs) -> None:
@@ -1541,34 +1582,28 @@ class MutableAnsatzExperiment:
         )
 
     def _action_prune_two_qubit(self, **kwargs) -> None:
-        """Attempt to prune one non-locked two-qubit gate."""
+        """Apply one structural two-qubit pruning proposal."""
         gate_to_remove = kwargs.get("gate_to_remove")
-        
+
         if gate_to_remove is None and "target_occurrence" in kwargs and "target_pair" in kwargs:
             target_occurrence = kwargs["target_occurrence"]
             target_pair = kwargs["target_pair"]
-            
+
             gate_to_remove = self._get_circuit_index_from_pair_occurrence(
                 occurrence=target_occurrence,
                 pair=target_pair,
             )
-            
+
         if gate_to_remove is None:
             logger.info(
                 "Skipping targeted prune because gate with pair %s and occurrence %s "
                 "no longer exists in the current ansatz.",
-                target_pair,
-                target_occurrence,
+                kwargs.get("target_pair"),
+                kwargs.get("target_occurrence"),
             )
             return
-        
-        self.prune_two_qubit_gate_attempt(
-            cost=kwargs["cost"],
-            gate_to_remove=gate_to_remove,
-            temperature=kwargs.get("temperature", 0.08),
-            alpha=kwargs.get("alpha", 0.1),
-            accept_tol=kwargs.get("accept_tol", 0.2),
-        )
+
+        self.apply_two_qubit_pruning_proposal(gate_to_remove=gate_to_remove)
         
     def _apply_action(
         self,
@@ -1581,7 +1616,7 @@ class MutableAnsatzExperiment:
         Parameters
         ----------
         spec : ActionSpec
-            ActionSpec to apply. Supported actions are:
+            ActionSpec to apply. Some supported actions are:
             - ``"insert_random_gate"``
             - ``"insert_gate"``
             - ``"insert_block"``
@@ -1636,7 +1671,12 @@ class MutableAnsatzExperiment:
         ValueError
             If any action in the plan is unknown or if a required argument is missing.
         """
-        for spec in plan.actions:
+        for i, spec in enumerate(plan.actions):
+            logger.info(
+                "Executing action %s/%s.",
+                i + 1,
+                len(plan.actions),
+            )
             self._apply_action(spec, cost=cost)
     
     def _snapshot_state(self) -> ExperimentSnapshot:
@@ -1738,6 +1778,8 @@ class MutableAnsatzExperiment:
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         ansatz_before: QuantumCircuit | None = None,
         ansatz_after: QuantumCircuit | None = None,
+        metropolis_temperature: float | None = None,
+        metropolis_rng: np.random.Generator | None = None,
     ) -> bool:
         """
         Return whether a proposed outer-loop update should be accepted.
@@ -1749,8 +1791,7 @@ class MutableAnsatzExperiment:
         cost_after : float
             Objective value after the structural proposal and retraining.
         accept_tol : float, optional
-            Required improvement threshold. The proposal is accepted if the final
-            score is at least `accept_tol` lower than the initial score.
+            Required improvement threshold for deterministic acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
             Optional penalty function added to the objective in order to discourage
             overly complex ansaetze.
@@ -1758,6 +1799,13 @@ class MutableAnsatzExperiment:
             Ansatz before the proposal. Required if `complexity_penalty` is used.
         ansatz_after : QuantumCircuit | None, optional
             Ansatz after the proposal. Required if `complexity_penalty` is used.
+        metropolis_temperature : float | None, optional
+            Temperature parameter for Metropolis-like acceptance of proposals that
+            do not satisfy the deterministic acceptance threshold. If None or
+            non-positive, acceptance remains deterministic.
+        metropolis_rng : np.random.Generator | None, optional
+            Random-number generator used for Metropolis acceptance. If None, a new
+            default generator is created when needed.
 
         Returns
         -------
@@ -1775,15 +1823,56 @@ class MutableAnsatzExperiment:
                 )
             score_before += float(complexity_penalty(ansatz_before))
             score_after += float(complexity_penalty(ansatz_after))
-            
+
+        threshold_score = score_before + accept_tol
+        delta_score = score_after - threshold_score
+
         logger.info(
-            "Evaluating outer acceptance: score_before=%.10f, score_after=%.10f, accept_tol=%.10f.",
+            "Evaluating outer acceptance: score_before=%.10f, score_after=%.10f, "
+            "accept_tol=%.10f, threshold_score=%.10f.",
             score_before,
             score_after,
             accept_tol,
+            threshold_score,
         )
 
-        return score_after <= score_before - accept_tol
+        # Deterministic acceptance if the proposal clears the threshold.
+        if delta_score <= 0:
+            logger.info(
+                "Accepted outer step deterministically because score_after "
+                "cleared the acceptance threshold."
+            )
+            return True
+
+        # If Metropolis is disabled, reject uphill proposals.
+        if metropolis_temperature is None or metropolis_temperature <= 0:
+            logger.info(
+                "Rejected outer step deterministically because score_after "
+                "did not clear the acceptance threshold and Metropolis acceptance "
+                "is disabled."
+            )
+            return False
+
+        if metropolis_rng is None:
+            metropolis_rng = np.random.default_rng()
+
+        scale = max(abs(score_before), 1.0)
+        acceptance_probability = float(
+            np.exp(-delta_score / (metropolis_temperature * scale))
+        )
+        accepted = bool(metropolis_rng.random() < acceptance_probability)
+
+        logger.info(
+            "Metropolis acceptance: delta_score=%.10f, temperature=%.10f, "
+            "scale=%.10f, acceptance_probability=%.10f, accepted=%s.",
+            delta_score,
+            metropolis_temperature,
+            scale,
+            acceptance_probability,
+            accepted,
+        )
+
+        return accepted
 
     def insert_random(self) -> None:
         """
@@ -1969,75 +2058,53 @@ class MutableAnsatzExperiment:
 
         return self.adaptive_ansatz.current_ansatz
 
-    def prune_two_qubit_gate_attempt(
-        self, 
-        cost: Callable, 
+    def apply_two_qubit_pruning_proposal(
+        self,
         gate_to_remove: int | None = None,
-        temperature: float = 0.08, 
-        alpha: float = 0.1, 
-        accept_tol: float = 0.2
-        ) -> None:
+    ) -> bool:
         """
-        Attempt to prune one non-locked two-qubit gate from the current ansatz.
+        Apply a structural proposal that removes one non-locked two-qubit gate.
 
         Parameters
         ----------
-        cost : Callable
-            Cost function with signature ``cost(params, ansatz)``.
         gate_to_remove : int | None, optional
-            Specific circuit index of the two-qubit gate to attempt to prune. If None, 
-            a gate is chosen automatically from the non-locked two-qubit gates in the ansatz.
-        temperature : float, optional
-            The temperature factor for Metropolis-like acceptance probability:
-            .. math::
-                p = exp(-\beta \frac{C_{new} - C_{o}}{C_o})
-        alpha : float, optional
-            Scaling factor for gate locking probability:
-            .. math::
-                P_{\text{lock}} = 1 - e^{-\alpha \frac{\Delta C}{|C_o|}}
-        accept_tol : float, optional
-            Tolerance for accepting the change. Defaults to 0.2.
-                
-        Notes
-        -----
-        This method evaluates the trial removal at the current trained parameter
-        vector and then either applies the accepted pruning or locks the rejected
-        gate according to the pruning policy.
+            Circuit-data index of the tracked two-qubit gate to remove. If None,
+            one removable gate is selected automatically.
+
+        Returns
+        -------
+        bool
+            True if a proposal was successfully applied, False otherwise.
         """
-        assert len(self.last_params) > 0, (
-            "Ansatz has not been trained yet. Train to set last parameters."
-        )
-        
-        decision = evaluate_two_qubit_gate_pruning(
+        proposal = make_two_qubit_pruning_proposal(
             ansatz=self.ansatz,
             two_q_map=self._2qbg_positions,
             locked_gates=self.locked_gates,
-            last_params=self.last_params,
-            last_cost=self.last_cost,
-            cost=cost,
             is_locked=is_locked_circuit_index,
-            temperature=temperature,
-            alpha=alpha,
-            accept_tol=accept_tol,
-            gate_to_remove=gate_to_remove
+            gate_to_remove=gate_to_remove,
         )
-        
-        if not decision.attempted:
-            return
 
-        assert decision.gate_to_remove is not None
+        if not proposal.attempted:
+            if proposal.note is not None:
+                logger.info(proposal.note)
+            return False
 
-        if decision.accepted:
-            self._update_locked_gates_on_removal(decision.gate_to_remove)
-            self.adaptive_ansatz.update_ansatz(decision.trial_ansatz)
-            self._sync_after_ansatz_change()
-            self.trainer.update_last_evaluation(cost=decision.trial_cost)
-            return
+        assert proposal.gate_to_remove is not None
+        assert proposal.trial_ansatz is not None
 
-        if decision.should_lock:
-            self._lock_circuit_index(decision.gate_to_remove)
+        self._update_locked_gates_on_removal(proposal.gate_to_remove)
+        self.adaptive_ansatz.update_ansatz(proposal.trial_ansatz)
+        self._sync_after_ansatz_change()
+        self.prune_parameter_memory_to_current_ansatz()
 
-        logger.info(f"Updated ansatz. New 2 qubit gate positions are: {self._2qbg_positions}.")
+        logger.info(
+            "Applied structural pruning proposal: removed gate at circuit index %s "
+            "(pair=%s, occurrence=%s).",
+            proposal.gate_to_remove,
+            proposal.target_pair,
+            proposal.target_occurrence,
+        )
+        return True
         
     def get_current_parameters(self) -> list[Parameter]:
         return self.adaptive_ansatz.get_current_ansatz().parameters

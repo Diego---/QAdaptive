@@ -798,7 +798,7 @@ class SPSA(StepwiseOptimizer):
             if norm > 1:
                 grad = grad / norm
                 
-        logger.debug("Gradient was estimated as %s", grad)
+        logger.info("Gradient was estimated as %s", grad)
 
         if self.lr_iterator is None:
             self._create_iterators(fun=fun, x0=x, n_start=max(iteration - 1, 0), **kwargs)

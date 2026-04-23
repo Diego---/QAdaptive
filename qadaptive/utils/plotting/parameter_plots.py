@@ -113,6 +113,7 @@ def plot_parameter_lifelines(
     linewidth: float = 1.5,
     legend_outside: bool = True,
     show_legend: bool = True,
+    title: str | None = "Named parameter trajectories",
 ) -> tuple[plt.Figure, plt.Axes]:
     """
     Plot the evolution of named parameters across global plotting indices.
@@ -162,7 +163,8 @@ def plot_parameter_lifelines(
 
     ax.set_xlabel("Global inner-loop iteration")
     ax.set_ylabel("Parameter value")
-    ax.set_title("Named parameter trajectories")
+    if title is not None:
+        ax.set_title(title)
 
     if show_legend:
         if legend_outside:

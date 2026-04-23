@@ -110,6 +110,64 @@ def _build_cz_identity(params: list[Parameter]) -> QuantumCircuit:
     qc.cz(0, 1)
     return qc
 
+def _build_cz_identity_rotation_on_one_qubit(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit identity-initializable block.
+
+    The block is
+        RX(a) on q0
+        RY(b) on q0
+        CZ(0, 1)
+        RX(c) on q0
+        RY(d) on q0
+        CZ(0, 1)
+
+    For all parameters initialized to zero, the block is exactly identity.
+    """
+    qc = QuantumCircuit(2, name="cz_identity")
+    qc.rx(params[0], 0)
+    qc.ry(params[1], 0)
+    qc.cz(0, 1)
+    qc.rx(params[2], 0)
+    qc.ry(params[3], 0)
+    qc.cz(0, 1)
+    return qc
+
+def _build_big_cz_identity(params: list[Parameter]) -> QuantumCircuit:
+    """
+    Two-qubit identity-initializable block.
+
+    The block is
+        RX(a) on q0
+        RY(b) on q0
+        CZ(0, 1)
+        RX(c) on q1
+        RY(d) on q1
+        CZ(0, 1)
+        RX(e) on q0
+        RY(f) on q0
+        RX(g) on q1
+        RY(h) on q1
+
+    For all parameters initialized to zero, the block is exactly identity.
+    """
+    qc = QuantumCircuit(3, name="big_cz_identity")
+    qc.rx(params[0], 0)
+    qc.ry(params[1], 0)
+    qc.cz(0, 1)
+    qc.rx(params[2], 0)
+    qc.ry(params[3], 0)
+    qc.cz(0, 2)
+    qc.rx(params[4], 0)
+    qc.ry(params[5], 0)
+    qc.cz(0, 1)
+    qc.rx(params[6], 0)
+    qc.ry(params[7], 0)
+    qc.cz(0, 2)
+    qc.rx(params[8], 0)
+    qc.ry(params[9], 0)
+    return qc
+
 def _build_single_rxx_block(params: list[Parameter]) -> QuantumCircuit:
     """
     Two-qubit identity-initializable block.
@@ -124,7 +182,7 @@ def _build_single_rxx_block(params: list[Parameter]) -> QuantumCircuit:
     qc = QuantumCircuit(2, name="single_cx_block")
     qc.rz(params[0], 0)
     qc.rxx(params[1], 0, 1)
-    qc.rz(params[2], 1)
+    qc.rz(params[2], 0)
     return qc
 
 def _build_single_rzz_block(params: list[Parameter]) -> QuantumCircuit:
@@ -141,7 +199,7 @@ def _build_single_rzz_block(params: list[Parameter]) -> QuantumCircuit:
     qc = QuantumCircuit(2, name="single_cz_block")
     qc.rx(params[0], 0)
     qc.rzz(params[1], 0, 1)
-    qc.rx(params[2], 1)
+    qc.rx(params[2], 0)
     return qc
 
 def _build_single_cx_block(params: list[Parameter]) -> QuantumCircuit:
@@ -182,8 +240,8 @@ def _build_single_cz_block(params: list[Parameter]) -> QuantumCircuit:
     qc.ry(params[0], 0)
     qc.rx(params[1], 0)
     qc.cz(0, 1)
-    qc.ry(params[2], 1)
-    qc.rx(params[3], 1)
+    qc.ry(params[2], 0)
+    qc.rx(params[3], 0)
     return qc
 
 
@@ -205,6 +263,18 @@ DEFAULT_BLOCK_POOL: dict[str, PoolBlock] = {
         num_qubits=2,
         num_parameters=4,
         builder=_build_cz_identity
+    ),
+    "cz_identity_rotation_on_one_qubit": PoolBlock(
+        name="cz_identity_rotation_on_one_qubit",
+        num_qubits=2,
+        num_parameters=4,
+        builder=_build_cz_identity_rotation_on_one_qubit
+    ),
+    "big_cz_identity": PoolBlock(
+        name="big_cz_identity",
+        num_qubits=3,
+        num_parameters=10,
+        builder=_build_big_cz_identity
     ),
     "single_cx_block": PoolBlock(
         name="single_cx_block",

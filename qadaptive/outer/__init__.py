@@ -6,12 +6,14 @@ from .plan_builders import (
     random_insert_index_policy,
     between_2qg_indices_policy,
     build_star_growth_plan,
+    build_three_qubit_block_growth_plan,
     build_uniform_growth_plan,
     build_nearest_neighbor_growth_plan,
     build_single_qubit_block_plan,
     build_simplification_plan,
     build_prune_sweep_plan,
     build_targeted_prune_plan,
+    combine_plan_builders,
 )
 
 from .plan_helpers import (
@@ -43,6 +45,7 @@ __all__ = [
     "between_2qg_indices_policy",
 
     # Plan builders
+    "build_three_qubit_block_growth_plan",
     "build_star_growth_plan",
     "build_nearest_neighbor_growth_plan",
     "build_uniform_growth_plan",
@@ -50,6 +53,7 @@ __all__ = [
     "build_simplification_plan",
     "build_prune_sweep_plan",
     "build_targeted_prune_plan",
+    "combine_plan_builders",
 
     # Plan helpers / selectors
     "pair_counts",
