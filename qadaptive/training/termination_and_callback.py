@@ -242,10 +242,10 @@ def create_live_plot_callback(
             ax.set_title("Cost Evolution")
             ax.set_xlabel(progress_str)
             ax.set_ylabel("Objective")
-            ax.plot(counts, values, "b.", label="Objective")
+            ax.plot(range(len(values)), values, "b.", label="Objective")
 
             if extra_eval_freq is not None and values_extra is not None and len(values_extra) > 0:
-                x_extra = counts[extra_eval_freq - 1 :: extra_eval_freq][: len(values_extra)]
+                x_extra = [(2 * i) +1 for i in range(len(values_extra))]
                 y_extra = [_nominal_value(v) for v in values_extra]
                 yerr_extra = [_std_value(v) for v in values_extra]
 
