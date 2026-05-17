@@ -1368,6 +1368,9 @@ class MutableAnsatzExperiment:
         )
         
         train_iterations_list: list[int] = train_iterations.copy() if isinstance(train_iterations, list) else [train_iterations] * outer_iterations
+        # Extend the train_iterations_list if it's shorter than outer_iterations, using the last specified value for the remaining steps.
+        if len(train_iterations_list) < outer_iterations:
+            train_iterations_list += [train_iterations_list[-1]] * (outer_iterations - len(train_iterations_list))
         if train_before_first_plan:
             train_iterations_list = [train_iterations_list[0]] + train_iterations_list  # Add an initial training phase before the first plan if requested
         

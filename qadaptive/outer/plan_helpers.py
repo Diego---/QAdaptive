@@ -164,6 +164,125 @@ def select_nearest_neighbor_pairs(
 
     return ordered
 
+def select_least_used_pairs(
+    num_qubits: int,
+    two_q_map: TwoQMap,
+    max_pairs: int | None = None,
+    allowed_pairs: list[tuple[int, int]] | None = None,
+    forbidden_pairs: list[tuple[int, int]] | None = None,
+    ordered: bool = True,
+    tie_break: str = "random",
+) -> list[tuple[int, int]]:
+    """
+    Select qubit pairs for growth, prioritizing pairs with the fewest existing
+    two-qubit gates.
+
+    Unlike `select_least_frequent_pair_gates`, this selector considers all
+    possible candidate pairs, including pairs that are currently absent from
+    the ansatz.
+
+    Parameters
+    ----------
+    num_qubits : int
+        Total number of qubits in the ansatz.
+    two_q_map : TwoQMap
+        Current two-qubit gate map.
+    max_pairs : int | None, optional
+        Maximum number of pairs to return. If None, all eligible pairs are
+        returned.
+    allowed_pairs : list[tuple[int, int]] | None, optional
+        Explicit whitelist of allowed pairs. If None, all pairs q1 < q2 are
+        considered.
+    forbidden_pairs : list[tuple[int, int]] | None, optional
+        Explicit blacklist of forbidden pairs.
+    ordered : bool, optional
+        If False, canonicalize pairs as q1 < q2. Default is True.
+    tie_break : {"lexicographic", "random"}, optional
+        Rule for ordering pairs with the same current two-qubit-gate count.
+
+        - "lexicographic": ties are resolved deterministically by pair index.
+        - "random": pairs are randomly shuffled within each equal-count group.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        Pairs ordered from least-used to most-used.
+        
+    Raises
+    ------
+    ValueError
+        If `num_qubits` is less than 2, `max_pairs` is not positive when
+        provided, or `tie_break` is invalid.
+    """
+    if num_qubits < 2:
+        raise ValueError("`num_qubits` must be at least 2.")
+
+    if tie_break not in {"lexicographic", "random"}:
+        raise ValueError(
+            "`tie_break` must be either 'lexicographic' or 'random'."
+        )
+
+    if allowed_pairs is None:
+        candidates = [
+            (q1, q2)
+            for q1 in range(num_qubits)
+            for q2 in range(q1 + 1, num_qubits)
+        ]
+    else:
+        candidates = list(allowed_pairs)
+
+    if not ordered:
+        candidates = [tuple(sorted(pair)) for pair in candidates]
+
+    # Remove self-pairs and duplicates while preserving deterministic order.
+    candidates = sorted(set(pair for pair in candidates if pair[0] != pair[1]))
+
+    if forbidden_pairs is not None:
+        forbidden = set(forbidden_pairs)
+        if not ordered:
+            forbidden = {tuple(sorted(pair)) for pair in forbidden}
+        candidates = [pair for pair in candidates if pair not in forbidden]
+
+    counts = pair_counts(two_q_map)
+
+    if not ordered:
+        # Count both orientations together if the circuit may contain (i, j)
+        # and (j, i) as equivalent entangling structure.
+        canonical_counts: dict[tuple[int, int], int] = {}
+        for pair, count in counts.items():
+            canonical_pair = tuple(sorted(pair))
+            canonical_counts[canonical_pair] = canonical_counts.get(canonical_pair, 0) + count
+        counts = canonical_counts
+
+    if tie_break == "lexicographic":
+        selected = sorted(
+            candidates,
+            key=lambda pair: (counts.get(pair, 0), pair[0], pair[1]),
+        )
+
+    else:
+        # Group by current pair count, sort count levels, then shuffle inside
+        # each equal-count group.
+        pairs_by_count: dict[int, list[tuple[int, int]]] = {}
+
+        for pair in candidates:
+            count = counts.get(pair, 0)
+            pairs_by_count.setdefault(count, []).append(pair)
+
+        selected = []
+
+        for count in sorted(pairs_by_count):
+            group = pairs_by_count[count]
+            random.shuffle(group)
+            selected.extend(group)
+
+    if max_pairs is not None:
+        if max_pairs <= 0:
+            raise ValueError("`max_pairs` must be positive if provided.")
+        selected = selected[:max_pairs]
+
+    return selected
+
 def take_first_n_gates(two_q_map: TwoQMap, n: int | None) -> TwoQMap:
     """
     Return at most the first `n` two-qubit gates from a TwoQMap, ordered by
