@@ -11,7 +11,8 @@ from qadaptive.core.mutation import TwoQMap
 from .plan_helpers import (
     select_star_targets,
     select_nearest_neighbor_pairs,
-    select_most_frequent_pair_gates
+    select_most_frequent_pair_gates,
+    select_least_used_pairs,
 )
 
 if TYPE_CHECKING:
@@ -488,7 +489,6 @@ def build_uniform_growth_plan(
 
     for q1 in range(num_qubits):
         for q2 in range(q1 + 1, num_qubits):
-            circ_ind = insert_index_policy(experiment, (q1, q2), insertion_number)
 
             actions.append(
                 ActionSpec(
@@ -515,6 +515,113 @@ def build_uniform_growth_plan(
 
     return OuterStepPlan(
         name="uniform_growth",
+        actions=actions,
+        acceptance_mode="force" if force_accept else "outer",
+        label=label,
+    )
+    
+def build_least_used_pair_growth_plan(
+    experiment: MutableAnsatzExperiment,
+    block_name: str = "cx_identity",
+    max_insertions: int = 2,
+    insert_index_policy: Callable | None = None,
+    force_accept: bool = False,
+    allowed_pairs: list[tuple[int, int]] | None = None,
+    forbidden_pairs: list[tuple[int, int]] | None = None,
+    ordered: bool = True,
+    tie_break: str = "random",
+    add_simplify: bool = True,
+    simplify_kwargs: dict[str, Any] | None = None,
+    label: str | None = None,
+) -> OuterStepPlan:
+    """
+    Build a growth plan that inserts entangling blocks on the least-used qubit
+    pairs.
+
+    This is similar in spirit to uniform growth, but instead of inserting one
+    block on every possible pair, it inserts only up to `max_insertions` blocks,
+    prioritizing pairs with the fewest currently tracked two-qubit gates.
+    
+    Parameters
+    ----------
+    experiment : MutableAnsatzExperiment
+        Experiment instance used to access the experiment state.
+    block_name : str, optional
+        Name of the block to insert for each pair.
+    max_insertions : int, optional
+        Maximum number of block insertions to include in the plan. Default is 2.
+    insert_index_policy : Callable | None, optional
+        Function that determines the circuit-data index for each insertion.
+        It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
+        If None, a default policy that appends at the end of the circuit is used.
+    force_accept : bool, optional
+        Whether to set the acceptance mode to "force", which accepts all changes
+        made by the plan without evaluating the cost.
+    allowed_pairs : list[tuple[int, int]] | None, optional
+        Explicit whitelist of allowed qubit pairs for growth.
+    forbidden_pairs : list[tuple[int, int]] | None, optional
+        Explicit blacklist of forbidden qubit pairs for growth.
+    ordered : bool, optional
+        Whether to treat pairs as ordered (i.e., (q1, q2) is different from (q2, q1)).
+        If False, the pair (q1, q2) will be considered the same as (q2, q1) for the purposes 
+        of counting and filtering.
+    tie_break : {"lexicographic", "random"}, optional
+        Rule for ordering pairs with the same current two-qubit-gate count.
+    add_simplify : bool, optional
+        Whether to append a simplification action after the insertion burst.
+    simplify_kwargs : dict[str, Any] | None, optional
+        Keyword arguments for the simplification action.
+    label : str | None, optional
+        Optional descriptive label for the plan.
+    """
+    if max_insertions <= 0:
+        raise ValueError("`max_insertions` must be positive.")
+
+    if insert_index_policy is None:
+        insert_index_policy = default_append_index_policy
+        
+    pairs = select_least_used_pairs(
+        num_qubits=experiment.ansatz.num_qubits,
+        two_q_map=experiment._2qbg_positions,
+        max_pairs=max_insertions,
+        allowed_pairs=allowed_pairs,
+        forbidden_pairs=forbidden_pairs,
+        ordered=ordered,
+        tie_break=tie_break,
+    )
+    
+    if not pairs:
+        raise ValueError("No eligible pairs are available for least-used pair growth.")
+    
+    actions: list[ActionSpec] = []
+
+    for insertion_number, pair in enumerate(pairs):
+        target_qubits = list(pair)
+
+        actions.append(
+            ActionSpec(
+                action=INSERT_BLOCK,
+                kwargs={
+                    "block_name": block_name,
+                    "qubits": target_qubits,
+                    "insert_policy": insert_index_policy,
+                    "insertion_number": insertion_number,
+                },
+                label=f"{block_name}_{pair[0]}_{pair[1]}",
+            )
+        )
+
+    if add_simplify:
+        actions.append(
+            ActionSpec(
+                action=SIMPLIFY,
+                kwargs={} if simplify_kwargs is None else dict(simplify_kwargs),
+                label="simplify_after_least_used_pair_growth",
+            )
+        )
+
+    return OuterStepPlan(
+        name="least_used_pair_growth",
         actions=actions,
         acceptance_mode="force" if force_accept else "outer",
         label=label,
