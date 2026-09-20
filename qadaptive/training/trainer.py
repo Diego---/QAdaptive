@@ -1,15 +1,15 @@
 import logging
 import random
 from time import time
-from typing import Callable, SupportsFloat
+from typing import Callable
 
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit_algorithms.optimizers.optimizer import OptimizerResult
 
-from .history import IterationRecord, TrainingRunRecord
 from .optimizers import SPSA
-from .optimizers.stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
+from .optimizers.stepwise_optimizer import StepwiseOptimizer, TERMINATIONCHECKER
+from .recorder import InnerLoopRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +25,8 @@ class InnerLoopTrainer:
     ----------
     optimizer : StepwiseOptimizer
         Optimizer instance used for training.
-    track_gradients : bool
-        Whether to store gradient estimates during training.
-    callback : list[CALLBACK] | None
-        Optional trainer-level callback or callbacks executed after each
-        accepted step.
+    recorder : InnerLoopRecorder
+        Persistent recorder that owns all inner-loop history.
     termination_checker : TERMINATIONCHECKER | None
         Optional trainer-level termination checker.
     gradient_history : dict[int, list[np.ndarray]] | None
@@ -40,8 +37,7 @@ class InnerLoopTrainer:
         self,
         optimizer: StepwiseOptimizer | None = None,
         optimizer_options: dict | None = None,
-        track_gradients: bool = True,
-        callback: CALLBACK | list[CALLBACK] | None = None,
+        recorder: InnerLoopRecorder | None = None,
         termination_checker: TERMINATIONCHECKER | None = None,
     ) -> None:
         """
@@ -54,10 +50,9 @@ class InnerLoopTrainer:
         optimizer_options : dict | None, optional
             Keyword arguments used to initialize a default SPSA optimizer if
             ``optimizer`` is not provided.
-        track_gradients : bool, optional
-            Whether to store gradient estimates during training.
-        callback : CALLBACK | list[CALLBACK] | None, optional
-            One callback or a list of callbacks executed after each accepted step.
+        recorder : InnerLoopRecorder | None, optional
+            Persistent recorder for all inner-loop runs. If omitted, an empty
+            recorder is created automatically.
         termination_checker : TERMINATIONCHECKER | None, optional
             Optional trainer-level termination checker.
         """
@@ -70,25 +65,14 @@ class InnerLoopTrainer:
             raise TypeError(f"Expected StepwiseOptimizer, got {type(optimizer).__name__}")
 
         self.optimizer = optimizer if optimizer is not None else SPSA(**optimizer_options)
-        self.track_gradients = track_gradients
-
-        if callback is None:
-            self.callback = None
-        elif isinstance(callback, list):
-            self.callback = callback
-        else:
-            self.callback = [callback]
-
+        self.recorder = InnerLoopRecorder() if recorder is None else recorder
         self.termination_checker = termination_checker
 
         # Training state
-        self.gradient_history = {0: []} if track_gradients else None
         self._times_trained = 0
         self._last_cost = 0.0
         self._last_params = np.array([], dtype=float)
         self._last_num_iterations = 0
-        self.training_run_history: list[TrainingRunRecord] = []
-        self.last_training_run_record: TrainingRunRecord | None = None
 
     @property
     def last_cost(self) -> float:
@@ -99,6 +83,23 @@ class InnerLoopTrainer:
     def last_params(self) -> np.ndarray:
         """Return the last recorded parameter vector."""
         return self._last_params
+
+    @property
+    def training_run_history(self):
+        """Return the recorder-owned training runs."""
+        return self.recorder.runs
+
+    @property
+    def last_training_run_record(self):
+        """Return the most recently started training run."""
+        return self.recorder.last_run
+
+    @property
+    def gradient_history(self) -> dict[int, list[np.ndarray]] | None:
+        """Return recorder-owned gradients grouped by training run."""
+        if not self.recorder.record_gradients:
+            return None
+        return self.recorder.gradient_history
 
     def update_last_evaluation(
         self,
@@ -196,38 +197,6 @@ class InnerLoopTrainer:
             **loss_kwargs,
         )
 
-    def _run_trainer_callbacks(
-        self,
-        params: np.ndarray,
-        fx_value: float,
-        accepted: bool,
-    ) -> None:
-        """
-        Execute trainer-level callbacks.
-
-        Parameters
-        ----------
-        params : np.ndarray
-            Current parameter vector.
-        fx_value : float
-            Objective value associated with ``params``.
-        accepted : bool
-            Whether the step was accepted.
-        """
-        if self.callback is None:
-            return
-
-        step_size = 0.0 if self.optimizer.last_stepsize is None else self.optimizer.last_stepsize
-
-        for cb in self.callback:
-            cb(
-                self.optimizer.nfev,
-                params,
-                fx_value,
-                step_size,
-                accepted,
-            )
-
     def _run_optimizer_callback_if_present(
         self,
         params: np.ndarray,
@@ -267,8 +236,10 @@ class InnerLoopTrainer:
         loss_next: Callable[[np.ndarray], float] | None = None,
         iterations: int = 100,
         iteration_start: int | None = None,
-        record_run_history: bool = False,
         initial_value: float | None = None,
+        outer_iteration: int | None = None,
+        action: str | None = None,
+        note: str | None = None,
         **kwargs,
     ) -> OptimizerResult:
         """
@@ -292,14 +263,16 @@ class InnerLoopTrainer:
             optimizers such as SPSA. If None, it will default to the optimizers
             initial step or the current iteration count if the optimizer has
             already been initialized.
-        record_run_history : bool, optional
-            If True, record the full trajectory of this training run in a
-            `TrainingRunRecord` and store it in `training_run_history`.
-            Default is False.
         initial_value : float | None, optional
             Objective value at the initial point, if already available. This is
-            stored in the training-run record when `record_run_history=True`.
-            If None, the initial objective is left unspecified.
+            stored without another evaluation. If None and the recorder was
+            configured with ``record_initial_value=True``, it is evaluated here.
+        outer_iteration : int | None, optional
+            Outer-loop iteration associated with this training run.
+        action : str | None, optional
+            Structural action associated with this training run.
+        note : str | None, optional
+            Optional run annotation.
         **kwargs
             Additional keyword arguments forwarded to the objective.
 
@@ -321,90 +294,86 @@ class InnerLoopTrainer:
         x = np.asarray(initial_point, dtype=float)
         loss_kwargs = {**kwargs, "ansatz": ansatz}
         
-        run_record: TrainingRunRecord | None = None
-        if record_run_history:
-            param_names = [p.name for p in ansatz.parameters]
-            if len(x) != len(param_names):
-                raise ValueError("Length of initial_point does not match number of ansatz parameters.")
-            
-            run_record = TrainingRunRecord(
-                run_index=self._times_trained,
-                param_names=param_names,
-                initial_point=x.copy(),
-                initial_value=float(initial_value) if initial_value is not None else None,
+        param_names = [parameter.name for parameter in ansatz.parameters]
+        if len(x) != len(param_names):
+            raise ValueError(
+                "Length of initial_point does not match number of ansatz parameters."
             )
-        else:
-            self.last_training_run_record = None
 
-        self.optimizer.initialize(
-            x,
-            loss_function,
-            iteration_start=iteration_start,
-            **loss_kwargs,
+        if initial_value is None and self.recorder.record_initial_value:
+            objective_for_initial = loss_function if loss_next is None else loss_next
+            try:
+                initial_value = float(
+                    objective_for_initial(x, ansatz=ansatz, **kwargs)
+                )
+            except TypeError:
+                initial_value = float(objective_for_initial(x, ansatz))
+
+        self.recorder.start_run(
+            param_names=param_names,
+            initial_point=x,
+            initial_value=initial_value,
+            outer_iteration=outer_iteration,
+            action=action,
+            note=note,
         )
 
         start = time()
         k = 0
 
-        while k < iterations:
-            k += 1
-            iteration_begin = time()
-
-            skip, x_next, fx_next, gradient_estimate, fx_estimate = self.step(
-                ansatz,
-                loss_function,
+        try:
+            self.optimizer.initialize(
                 x,
-                loss_next=loss_next,
-                **kwargs,
+                loss_function,
+                iteration_start=iteration_start,
+                **loss_kwargs,
             )
 
-            if skip:
-                logger.info(
-                    "Iteration %s/%s rejected in %s.",
-                    k,
-                    iterations,
-                    time() - iteration_begin,
-                )
-                continue
+            while k < iterations:
+                k += 1
+                iteration_begin = time()
 
-            x = x_next
-
-            if self.track_gradients and gradient_estimate is not None:
-                self.gradient_history[self._times_trained].append(
-                    np.asarray(gradient_estimate, dtype=float)
+                skip, x_next, fx_next, gradient_estimate, fx_estimate = self.step(
+                    ansatz,
+                    loss_function,
+                    x,
+                    loss_next=loss_next,
+                    **kwargs,
                 )
 
-            fx_callback = fx_estimate if fx_next is None else fx_next
-            fx_callback = float(fx_callback)
+                if skip:
+                    logger.info(
+                        "Iteration %s/%s rejected in %s.",
+                        k,
+                        iterations,
+                        time() - iteration_begin,
+                    )
+                    continue
 
-            self._run_optimizer_callback_if_present(x, fx_callback, True)
-            self._run_trainer_callbacks(x, fx_callback, True)
-
-            if record_run_history and run_record is not None:
+                x = x_next
+                fx_callback = float(fx_estimate if fx_next is None else fx_next)
                 step_size = (
-                    0.0 if self.optimizer.last_stepsize is None
+                    0.0
+                    if self.optimizer.last_stepsize is None
                     else float(self.optimizer.last_stepsize)
                 )
-                run_record.iterations.append(
-                    IterationRecord(
-                        iteration=k,
-                        params=np.asarray(x, dtype=float).copy(),
-                        value=fx_callback,
-                        stepsize=step_size,
-                        accepted=True,
-                        gradient=None if gradient_estimate is None else np.asarray(
-                            gradient_estimate, dtype=float
-                        ).copy(),
-                    )
+
+                self._run_optimizer_callback_if_present(x, fx_callback, True)
+                self.recorder(
+                    iteration=k,
+                    nfev=self.optimizer.nfev,
+                    params=x,
+                    value=fx_callback,
+                    stepsize=step_size,
+                    accepted=True,
+                    gradient=gradient_estimate,
                 )
 
-            checker = self.termination_checker
-            if checker is None:
-                checker = self.optimizer.termination_checker
+                checker = self.termination_checker
+                if checker is None:
+                    checker = self.optimizer.termination_checker
 
-            if checker is not None:
-                step_size = 0.0 if self.optimizer.last_stepsize is None else self.optimizer.last_stepsize
-                if checker(
+                if checker is not None and checker(
                     self.optimizer.nfev,
                     x,
                     fx_callback,
@@ -414,44 +383,42 @@ class InnerLoopTrainer:
                     logger.info("Terminated optimization at iteration %s/%s.", k, iterations)
                     break
 
-            logger.info(
-                "Iteration %s/%s done in %s.",
-                k,
-                iterations,
-                time() - iteration_begin,
+                logger.info(
+                    "Iteration %s/%s done in %s.",
+                    k,
+                    iterations,
+                    time() - iteration_begin,
+                )
+
+            logger.info("Finished inner-loop optimization in %s seconds.", time() - start)
+
+            result = OptimizerResult()
+            result.x = x
+
+            if loss_next is None:
+                logger.info("Calculating cost function value for final parameters.")
+                result.fun = float(loss_function(x, ansatz=ansatz, **kwargs))
+                logger.info("Final cost function value: %s", result.fun)
+            else:
+                logger.info("Calculating custom cost function value for final parameters.")
+                result.fun = float(loss_next(x, ansatz=ansatz, **kwargs))
+                logger.info("Final cost function value (from custom function): %s", result.fun)
+
+            result.nfev = self.optimizer.nfev
+            result.nit = k
+
+            self._last_cost = result.fun
+            self._last_params = np.asarray(x, dtype=float)
+            self._last_num_iterations = k
+            self._times_trained += 1
+
+            self.recorder.finish_run(
+                final_params=result.x,
+                final_value=result.fun,
             )
-
-        logger.info("Finished inner-loop optimization in %s seconds.", time() - start)
-
-        self._times_trained += 1
-
-        if self.track_gradients:
-            self.gradient_history[self._times_trained] = []
-
-        result = OptimizerResult()
-        result.x = x
-
-        if loss_next is None:
-            logger.info("Calculating cost function value for final parameters.")
-            result.fun = float(loss_function(x, ansatz=ansatz, **kwargs))
-            logger.info("Final cost function value: %s", result.fun)
-        else:
-            logger.info("Calculating custom cost function value for final parameters.")
-            result.fun = float(loss_next(x, ansatz=ansatz, **kwargs))
-            logger.info("Final cost function value (from custom function): %s", result.fun)
-
-        result.nfev = self.optimizer.nfev
-        result.nit = k
-
-        self._last_cost = result.fun
-        self._last_params = np.asarray(x, dtype=float)
-        self._last_num_iterations = k
-        
-        if record_run_history and run_record is not None:
-            run_record.final_value = float(result.fun)
-            self.last_training_run_record = run_record
-            self.training_run_history.append(run_record)
-        else:
-            self.last_training_run_record = None
-
-        return result
+            return result
+        except BaseException as error:
+            self.recorder.abort_run(
+                note=f"Aborted after {k} iterations: {type(error).__name__}: {error}"
+            )
+            raise

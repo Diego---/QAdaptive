@@ -11,6 +11,7 @@ def plot_cost_with_outer_boundaries(
     figsize: tuple[int, int] = (12, 5),
     annotate_actions: bool = True,
     label_rotation: float = 10,
+    show_extra: bool = True,
     title: str | None = "Objective trace with outer-step boundaries",
     title_pad: int = 16,
     title_loc: str = "center",
@@ -29,6 +30,8 @@ def plot_cost_with_outer_boundaries(
         Default is True.
     label_rotation : float, optional
         Rotation angle in degrees for action labels. Default is ``10``.
+    show_extra : bool, optional
+        Whether to overlay periodic extra-objective evaluations. Default is True.
 
     Returns
     -------
@@ -54,7 +57,25 @@ def plot_cost_with_outer_boundaries(
     x_all = np.concatenate(x_all)
     y_all = np.concatenate(y_all)
 
-    ax.plot(x_all, y_all, ".-")
+    ax.plot(x_all, y_all, ".-", label="Objective")
+
+    extra_finite = np.asarray([], dtype=float)
+    if show_extra:
+        extra_values = np.concatenate([trace.extra_values for trace in traces])
+        extra_stds = np.concatenate([trace.extra_stds for trace in traces])
+        mask = np.isfinite(extra_values)
+        if np.any(mask):
+            extra_finite = extra_values[mask]
+            yerr = np.where(np.isfinite(extra_stds[mask]), extra_stds[mask], 0.0)
+            ax.errorbar(
+                x_all[mask],
+                extra_values[mask],
+                yerr=yerr,
+                fmt="o",
+                capsize=3,
+                label="Extra objective",
+            )
+            ax.legend(loc="best")
     ax.set_xlabel("Global inner-loop iteration")
     ax.set_ylabel("Objective")
     if title is not None:
@@ -64,7 +85,9 @@ def plot_cost_with_outer_boundaries(
         ax.axvline(trace.stop - 0.5, linestyle="--", linewidth=1)
 
     if annotate_actions:
-        finite_values = y_all[np.isfinite(y_all)]
+        finite_values = np.concatenate(
+            [y_all[np.isfinite(y_all)], extra_finite]
+        )
         if finite_values.size > 0:
             y_min = float(np.min(finite_values))
             y_max = float(np.max(finite_values))

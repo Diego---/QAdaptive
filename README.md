@@ -80,7 +80,12 @@ from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector
 from qiskit.quantum_info import SparsePauliOp, Statevector
 
-from qadaptive import AdaptiveAnsatz, MutableAnsatzExperiment, InnerLoopTrainer
+from qadaptive import (
+    AdaptiveAnsatz,
+    InnerLoopRecorder,
+    InnerLoopTrainer,
+    MutableAnsatzExperiment,
+)
 from qadaptive.outer import (
     build_single_qubit_block_plan,
     build_star_growth_plan,
@@ -140,9 +145,14 @@ optimizer = SPSA(
     resamplings=1,
 )
 
+recorder = InnerLoopRecorder(
+    record_initial_value=True,
+    record_gradients=True,
+)
+
 trainer = InnerLoopTrainer(
     optimizer=optimizer,
-    track_gradients=True,
+    recorder=recorder,
 )
 
 
@@ -203,8 +213,6 @@ results = experiment.run_outer_loop(
     reuse_parameter_memory=True,
     default_value_for_new_params=0.0,
     record_parameter_memory=True,
-    record_run_history=True,
-    store_initial_value_in_history=True,
     accept_tol=0.0,
     stop_on_error=True,
 )
@@ -214,7 +222,7 @@ results = experiment.run_outer_loop(
 print("Final energy:", experiment.last_cost)
 print("Number of accepted ansatz states:", len(experiment.accepted_ansatz_history))
 print("Number of optimizer results:", len(experiment.result_history))
-print("Number of training runs recorded:", len(experiment.training_run_history))
+print("Number of training runs recorded:", len(recorder.runs))
 
 final_circuit = experiment.ansatz
 final_params = experiment.get_current_parameter_dict()
@@ -240,7 +248,7 @@ The experiment object is designed to expose the state of the run after optimizat
 
 - `experiment.result_history` for the optimizer-level outcomes of each training phase,
 - `experiment.accepted_ansatz_history` for the accepted structural milestones,
-- `experiment.training_run_history` for detailed inner-loop trajectories when `record_run_history=True`,
+- `experiment.recorder` (the same object as `recorder`) for detailed inner-loop trajectories,
 - `experiment.last_cost` and `experiment.last_params` for the current accepted state.
 
 Typical inspection patterns look like this:
@@ -259,25 +267,12 @@ best_circuit = best_record.ansatz.copy()
 best_params = dict(best_record.parameter_values)
 ```
 
-If you record full training traces, the plotting utilities can be used to reconstruct the global optimization history:
+The recorder owns the complete optimization history and exposes plotting methods directly:
 
 ```python
-from qadaptive.utils.plotting import (
-    build_training_run_traces,
-    plot_cost_with_outer_boundaries,
-    plot_parameter_lifelines,
-    plot_parameter_heatmap,
-)
-
-traces = build_training_run_traces(
-    records=experiment.training_run_history,
-    outer_step_history=experiment.outer_step_history,
-    include_initial=True,
-)
-
-plot_cost_with_outer_boundaries(traces)
-plot_parameter_lifelines(traces)
-plot_parameter_heatmap(traces)
+recorder.plot_objective()
+recorder.plot_parameters()
+recorder.plot_parameter_heatmap(normalize=True)
 ```
 
 ## Package layout
@@ -300,6 +295,7 @@ qadaptive/
 │   └── plan_helpers.py
 ├── training/
 │   ├── history.py
+│   ├── recorder.py
 │   ├── trainer.py
 │   ├── termination_and_callback.py
 │   └── optimizers/

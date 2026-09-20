@@ -17,6 +17,8 @@ class IterationRecord:
     stepsize: float
     accepted: bool
     gradient: np.ndarray | None = None
+    extra_value: float | None = None
+    extra_std: float | None = None
 
 
 @dataclass

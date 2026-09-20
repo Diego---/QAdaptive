@@ -1,12 +1,13 @@
 from .trainer import InnerLoopTrainer
+from .recorder import InnerLoopRecorder
 from .optimizers import SPSA, ADAM, powerseries
-from .termination_and_callback import create_live_plot_callback, TerminationChecker
+from .termination_and_callback import TerminationChecker
 
 __all__ = [
     "InnerLoopTrainer", 
+    "InnerLoopRecorder",
     "SPSA", 
     "ADAM",
-    "create_live_plot_callback", 
     "TerminationChecker", 
     "powerseries"
     ]

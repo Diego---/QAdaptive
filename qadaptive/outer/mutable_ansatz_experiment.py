@@ -2,7 +2,7 @@ import logging, json, re
 import numpy as np
 
 from datetime import datetime
-from typing import Callable, SupportsFloat
+from typing import Callable
 from pathlib import Path
 
 import qiskit.qpy as qpy
@@ -45,9 +45,6 @@ from qadaptive.outer.outer_loop import (
     OuterStepPlan
 )
 
-CALLBACK = Callable[[int, np.ndarray, float, SupportsFloat, bool], None]
-TERMINATIONCHECKER = Callable[[int, np.ndarray, float, SupportsFloat, bool], bool]
-
 logger = logging.getLogger(__name__)
 
 class MutableAnsatzExperiment:
@@ -81,8 +78,8 @@ class MutableAnsatzExperiment:
         selected gates during pruning.
     optimizer : Optimizer
         Optimizer currently used by the inner-loop trainer. Exposed as a property.
-    gradient_history : list[np.ndarray] | None
-        Gradient estimates stored by the trainer if gradient tracking is enabled;
+    gradient_history : dict[int, list[np.ndarray]] | None
+        Gradient estimates stored by the recorder and grouped by training run;
         otherwise None. Exposed as a property.
     last_cost : float | None
         Most recent cost value stored by the trainer. Exposed as a property.
@@ -172,25 +169,6 @@ class MutableAnsatzExperiment:
         
         self.trainer.set_optimizer(optimizer=optimizer, optimizer_options=optimizer_options)
         
-    def reset_optimizer_callback(
-        self,
-        callback: CALLBACK
-        ) -> None:
-        """
-        Set a callback function to be called at each iteration of the optimizer.
-        Parameters
-        ----------
-        callback : CALLBACK
-            A function with signature ``callback(iteration, params, cost, grad, accepted)``
-            that will be called at each iteration of the optimizer. The parameters are:
-                - eval_count: number of cost function evaluations
-                - parameters: the current parameter vector
-                - mean: the current cost function value
-                - stp_size: step size used for the parameter update
-                - accepted: whether the last parameter update was accepted by the optimizer
-        """
-        self.trainer.optimizer.callback = callback
-        
     def reset_optimizer_iteration(self, iteration: int = 0) -> None:
         """
         Reset the optimizer's internal iteration counter.
@@ -201,30 +179,6 @@ class MutableAnsatzExperiment:
             The value to which the optimizer's iteration counter should be reset. Default is 0.
         """
         self.trainer.optimizer.reset_runtime_state(iteration)
-        
-    def _reset_inner_loop_callback(
-        self,
-        callback_builder: Callable[..., CALLBACK] | None,
-        **callback_kwargs,
-    ) -> None:
-        """Rebuild the optimizer callback and reset optimizer iteration for the next inner-loop run."""
-        if callback_builder is None:
-            logger.warning("Optimizer does not have a callback builder. Skipping callback reset.")
-            return
-
-        callback_args = create_callback_args(
-            json_file_path=callback_kwargs.get("json_file_path"),
-            store_data=callback_kwargs.get("store_data", False),
-            extra_eval_freq=callback_kwargs.get("extra_eval_freq"),
-            cost_extra=callback_kwargs.get("cost_extra"),
-            plot=callback_kwargs.get("plot", True),
-            use_epoch=callback_kwargs.get("use_epoch", False),
-        )
-        
-        logger.info("Setting new optimizer callback function with args: %s.", callback_args)
-
-        new_callback = callback_builder(**callback_args)
-        self.reset_optimizer_callback(new_callback)
         
     def _reset_inner_loop_termination_checker(self) -> None:
         """Reset the inner-loop termination checker for the next training run."""
@@ -244,10 +198,14 @@ class MutableAnsatzExperiment:
         np.ndarray
             The last gradient vector recorded by the optimizer, or an empty array if no gradients are available.
         """
-        return (
-            self.gradient_history[-1] if self.gradient_history 
-            is not None and len(self.gradient_history) > 0 else np.array([])
-        )
+        if self.gradient_history is None:
+            return np.array([])
+
+        for run_gradients in reversed(list(self.gradient_history.values())):
+            if run_gradients:
+                return np.asarray(run_gradients[-1], dtype=float).copy()
+
+        return np.array([])
 
     def _update_params(self):
         """
@@ -807,8 +765,9 @@ class MutableAnsatzExperiment:
         iterations: int = 100,
         update_parameter_memory: bool = True,
         trainer_iteration_reset: int | None = None,
-        record_run_history: bool = False,
-        store_initial_value_in_history: bool = False,
+        outer_iteration: int | None = None,
+        action: str | None = None,
+        note: str | None = None,
         **kwargs
         ) -> OptimizerResult:
         """
@@ -830,11 +789,12 @@ class MutableAnsatzExperiment:
         trainer_iteration_reset : int | None, optional
             If not None, reset the optimizer iteration counter to this value before
             training begins.
-        record_run_history : bool, optional
-            If True, ask the trainer to store a `TrainingRunRecord` for this run.
-        store_initial_value_in_history : bool, optional
-            If True and `record_run_history=True`, evaluate the loss at the initial
-            point and store it in the resulting training-run record.
+        outer_iteration : int | None, optional
+            Outer-loop iteration associated with this training run.
+        action : str | None, optional
+            Structural action associated with this training run.
+        note : str | None, optional
+            Optional annotation stored with this training run.
         **kwargs
             Additional configuration forwarded to the trainer and objective.
 
@@ -857,16 +817,6 @@ class MutableAnsatzExperiment:
                 f"but the current ansatz has {current_ansatz.num_parameters} parameters."
             )
 
-        initial_value = None
-        if record_run_history and store_initial_value_in_history:
-            objective_for_initial = loss_function if loss_next is None else loss_next
-            try:
-                initial_value = float(
-                    objective_for_initial(initial_point_array, ansatz=current_ansatz, **kwargs)
-                )
-            except TypeError:
-                initial_value = float(objective_for_initial(initial_point_array, current_ansatz))
-
         result = self.trainer.train_one_time(
             ansatz=current_ansatz,
             loss_function=loss_function,
@@ -874,8 +824,9 @@ class MutableAnsatzExperiment:
             loss_next=loss_next,
             iterations=iterations,
             iteration_start=trainer_iteration_reset,
-            record_run_history=record_run_history,
-            initial_value=initial_value,
+            outer_iteration=outer_iteration,
+            action=action,
+            note=note,
             **kwargs,
         )
         
@@ -908,14 +859,10 @@ class MutableAnsatzExperiment:
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
         trainer_iteration_reset: int | None = 0,
-        callback_builder: Callable[..., CALLBACK] | None = None,
-        callback_kwargs: dict | None = None,
         update_parameter_memory: bool = True,
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
         record_parameter_memory: bool = True,
-        record_run_history: bool = False,
-        store_initial_value_in_history: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         metropolis_temperature: float | None = None,
@@ -947,12 +894,6 @@ class MutableAnsatzExperiment:
         trainer_iteration_reset : int | None,  optional
             Value to which the optimizer's iteration counter is reset after retraining.
             If None, the counter is not reset. Default is 0.
-        callback_builder : Callable[..., CALLBACK] | None, optional
-            Factory used to rebuild the optimizer callback after each retraining phase.
-            This is useful when live-plot callbacks should be reset between outer-loop
-            steps so that each inner-loop run starts with a fresh plot/history.
-        callback_kwargs : dict | None, optional
-            Keyword arguments forwarded to `callback_builder` when rebuilding the callback.
         update_parameter_memory : bool, optional
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
@@ -962,12 +903,6 @@ class MutableAnsatzExperiment:
             Default value for parameters not yet present in `parameter_memory`.
         record_parameter_memory : bool, optional
             Whether to append a parameter-memory record for this attempted step.
-        record_run_history : bool, optional
-            Whether to ask the trainer to store a `TrainingRunRecord` for the retraining phase
-            of this step.
-        store_initial_value_in_history : bool, optional
-            If True and `record_run_history=True`, evaluate the loss at the initial
-            point and store it in the resulting training-run record for the retraining phase.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -1029,6 +964,7 @@ class MutableAnsatzExperiment:
         self.execute_action_plan(plan, cost=loss_function)
 
         train_result: OptimizerResult | None = None
+        training_run = None
         if train_after_plan:     
             logger.info(
                 "Retraining after plan '%s' for %d inner-loop iterations.",
@@ -1070,17 +1006,13 @@ class MutableAnsatzExperiment:
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
                 trainer_iteration_reset=trainer_iteration_reset,
-                record_run_history=record_run_history,
-                store_initial_value_in_history=store_initial_value_in_history,
+                outer_iteration=self._outer_iteration,
+                action=plan.display_name,
                 **train_kwargs,
             )
+            training_run = self.trainer.recorder.last_run
             cost_after = float(train_result.fun)
-            
-            self._reset_inner_loop_callback(
-                callback_builder,
-                **({} if callback_kwargs is None else callback_kwargs)
-                ) # Will only reset if callback_builder is not None
-            
+
             self._reset_inner_loop_termination_checker()
         else:
             if plan.acceptance_mode == "outer":
@@ -1205,6 +1137,13 @@ class MutableAnsatzExperiment:
             )
             
         delta_cost = None if cost_before is None else cost_after - cost_before
+
+        if training_run is not None:
+            self.trainer.recorder.set_outer_result(
+                run_index=training_run.run_index,
+                accepted=accepted,
+                note=note,
+            )
             
         logger.info(
             "Completed outer step %d: accepted=%s, delta_cost=%s, params %d->%d, two_qubit_gates %d->%d.",
@@ -1248,14 +1187,10 @@ class MutableAnsatzExperiment:
         loss_next: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
         trainer_iteration_reset: int | None = 0,
-        callback_builder: Callable[..., CALLBACK] | None = None,
-        callback_kwargs: dict | None = None,
         update_parameter_memory: bool = True,
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
         record_parameter_memory: bool = True,
-        record_run_history: bool = False,
-        store_initial_value_in_history: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         metropolis_temperature: float | None = None,
@@ -1301,12 +1236,6 @@ class MutableAnsatzExperiment:
         trainer_iteration_reset : int | None, optional
             Value to which the optimizer's iteration counter is reset after retraining. 
             If None, the counter is not reset. Default is 0.
-        callback_builder : Callable[..., CALLBACK] | None, optional
-            Factory used to rebuild the optimizer callback after each retraining phase.
-            This is useful when live-plot callbacks should be reset between outer-loop
-            steps so that each inner-loop run starts with a fresh plot/history.
-        callback_kwargs : dict | None, optional
-            Keyword arguments forwarded to `callback_builder` when rebuilding the callback.
         update_parameter_memory : bool, optional
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
@@ -1316,12 +1245,6 @@ class MutableAnsatzExperiment:
             Default value assigned to newly introduced parameters when warm-starting.
         record_parameter_memory : bool, optional
             Whether to append parameter-memory records for each attempted outer step.
-        record_run_history : bool, optional
-            Whether to ask the trainer to store a `TrainingRunRecord` for each retraining phase
-            of the outer steps.
-        store_initial_value_in_history : bool, optional
-            If True and `record_run_history=True`, evaluate the loss at the initial point and
-            store it in the resulting training-run record for each retraining phase of the outer steps.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -1402,16 +1325,12 @@ class MutableAnsatzExperiment:
                 iterations=current_train_iterations,
                 update_parameter_memory=update_parameter_memory,
                 trainer_iteration_reset=trainer_iteration_reset,
-                record_run_history=record_run_history,
-                store_initial_value_in_history=store_initial_value_in_history,
+                outer_iteration=self._outer_iteration,
+                action="Initial training before first plan",
+                note="Initial training phase before executing any plans.",
                 **train_kwargs,
             )
-                            
-            self._reset_inner_loop_callback(
-                callback_builder,
-                **({} if callback_kwargs is None else callback_kwargs)
-                ) # Will only reset if callback_builder is not None
-            
+
             self._reset_inner_loop_termination_checker()
             
             if record_parameter_memory:
@@ -1442,6 +1361,11 @@ class MutableAnsatzExperiment:
             )
             
             self.outer_step_history.append(result)
+            self.trainer.recorder.set_outer_result(
+                run_index=self.trainer.recorder.last_run.run_index,
+                accepted=True,
+                note=result.note,
+            )
             # Advance an outer step in order to keep memory consistent.
             self._outer_iteration += 1 
 
@@ -1484,14 +1408,10 @@ class MutableAnsatzExperiment:
                     loss_next=loss_next,
                     train_after_plan=train_after_plan,
                     trainer_iteration_reset=trainer_iteration_reset,
-                    callback_builder=callback_builder,
-                    callback_kwargs=callback_kwargs,
                     update_parameter_memory=update_parameter_memory,
                     reuse_parameter_memory=reuse_parameter_memory,
                     default_value_for_new_params=default_value_for_new_params,
                     record_parameter_memory=record_parameter_memory,
-                    record_run_history=record_run_history,
-                    store_initial_value_in_history=store_initial_value_in_history,
                     accept_tol=accept_tol,
                     complexity_penalty=complexity_penalty,
                     metropolis_temperature=metropolis_temperature,
@@ -2294,15 +2214,23 @@ class MutableAnsatzExperiment:
                 "param_names": list(record.param_names),
                 "initial_point": np.asarray(record.initial_point, dtype=float).tolist(),
                 "initial_value": None if record.initial_value is None else float(record.initial_value),
+                "final_params": None if record.final_params is None else np.asarray(record.final_params, dtype=float).tolist(),
                 "final_value": None if record.final_value is None else float(record.final_value),
+                "outer_iteration": record.outer_iteration,
+                "action": record.action,
+                "accepted_outer_step": record.accepted_outer_step,
+                "note": record.note,
                 "iterations": [
                     {
                         "iteration": int(it.iteration),
+                        "nfev": int(it.nfev),
                         "params": np.asarray(it.params, dtype=float).tolist(),
                         "value": float(it.value),
                         "stepsize": float(it.stepsize),
                         "accepted": bool(it.accepted),
                         "gradient": None if it.gradient is None else np.asarray(it.gradient, dtype=float).tolist(),
+                        "extra_value": it.extra_value,
+                        "extra_std": it.extra_std,
                     }
                     for it in record.iterations
                 ],
@@ -2484,6 +2412,11 @@ class MutableAnsatzExperiment:
     def optimizer(self):
         """Return the current optimizer from the trainer."""
         return self.trainer.optimizer
+
+    @property
+    def recorder(self):
+        """Return the persistent inner-loop recorder."""
+        return self.trainer.recorder
 
     @property
     def gradient_history(self):
