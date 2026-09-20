@@ -11,6 +11,7 @@ class IterationRecord:
     """
 
     iteration: int
+    nfev: int
     params: np.ndarray
     value: float
     stepsize: float
@@ -34,3 +35,5 @@ class TrainingRunRecord:
     action: str | None = None
     accepted_outer_step: bool | None = None
     note: str | None = None
+    final_params: np.ndarray | None = None
+    final_value: float | None = None
