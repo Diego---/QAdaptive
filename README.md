@@ -341,7 +341,7 @@ This package is an independent implementation and extension of related adaptive-
 
 ## Version
 
-The package metadata currently identifies QAdaptive as version `0.1` / `0.1.0`.
+The package metadata currently identifies QAdaptive as version `0.2` / `0.2.0`.
 
 ## Citation
 
