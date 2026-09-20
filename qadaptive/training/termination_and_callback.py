@@ -163,7 +163,7 @@ def create_live_plot_callback(
         and may also accept an optional keyword argument `gradient`.
     """
 
-    _warn_legacy_callback("create_callback_args")
+    _warn_legacy_callback("create_live_plot_callback")
     
     if extra_eval_freq is not None:
         assert cost_extra is not None and values_extra is not None, (

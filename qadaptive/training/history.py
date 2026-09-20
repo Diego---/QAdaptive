@@ -30,10 +30,9 @@ class TrainingRunRecord:
     initial_point: np.ndarray
     initial_value: float | None
     iterations: list[IterationRecord] = field(default_factory=list)
+    final_params: np.ndarray | None = None
     final_value: float | None = None
     outer_iteration: int | None = None
     action: str | None = None
     accepted_outer_step: bool | None = None
     note: str | None = None
-    final_params: np.ndarray | None = None
-    final_value: float | None = None
