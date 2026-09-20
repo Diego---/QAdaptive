@@ -1,6 +1,7 @@
 import json
 import datetime
 import logging
+import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
@@ -10,6 +11,14 @@ from uncertainties.core import AffineScalarFunc
 
 logger = logging.getLogger(__name__)
 
+
+def _warn_legacy_callback(name: str) -> None:
+    warnings.warn(
+        f"`{name}` is deprecated and will be removed in a future release. "
+        "Use `InnerLoopRecorder` instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 def _nominal_value(value: float | AffineScalarFunc) -> float:
     """
@@ -113,6 +122,9 @@ def create_live_plot_callback(
     """
     Create a callback function that stores intermediate results, updates plots, and optionally writes data to a JSON file.
     
+    .. deprecated:: 0.1
+        Use :class:`InnerLoopRecorder` instead.
+    
     Parameters
     ----------
     counts : list[int]
@@ -150,6 +162,8 @@ def create_live_plot_callback(
 
         and may also accept an optional keyword argument `gradient`.
     """
+
+    _warn_legacy_callback("create_callback_args")
     
     if extra_eval_freq is not None:
         assert cost_extra is not None and values_extra is not None, (
@@ -275,6 +289,9 @@ def create_callback_args(
 ) -> tuple[list[int], list[float], list[list[float]], list[float], dict]:
     """
     Generate the arguments required by `create_live_plot_callback`.
+    
+    .. deprecated:: 0.1
+        Use :class:`InnerLoopRecorder` instead.
 
     Parameters
     ----------
@@ -300,6 +317,9 @@ def create_callback_args(
         The returned kwargs dictionary can be unpacked into
         `create_live_plot_callback(...)`.
     """
+    
+    _warn_legacy_callback("create_callback_args")
+    
     counts: list[int] = []
     values: list[float] = []
     params: list[list[float]] = []
