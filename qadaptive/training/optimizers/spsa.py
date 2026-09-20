@@ -661,6 +661,9 @@ class SPSA(StepwiseOptimizer):
             if self.second_order
             else [None] * num_samples
         )
+        
+        logger.info("Bernoulli perturbation directions generated: %s, and %s", deltas1, deltas2)
+        logger.info("Estimating function value and gradient with %d resamplings.", num_samples)
 
         for i in range(num_samples):
             value_sample, gradient_sample, hessian_sample = self._point_sample(
