@@ -22,6 +22,8 @@ from qiskit_algorithms.utils import algorithm_globals
 from .stepwise_optimizer import StepwiseOptimizer, CALLBACK, TERMINATIONCHECKER
 
 logger = logging.getLogger(__name__)
+VERBOSE_LEVEL = 15
+logging.addLevelName(VERBOSE_LEVEL, "VERBOSE")
 
 class SPSA(StepwiseOptimizer):
     """
@@ -662,7 +664,14 @@ class SPSA(StepwiseOptimizer):
             else [None] * num_samples
         )
         
-        logger.info("Bernoulli perturbation directions generated: %s, and %s", deltas1, deltas2)
+        msg = (
+            "Bernoulli perturbation directions generated: %s, and %s"
+            if self.second_order
+            else "Bernoulli perturbation direction generated: %s"
+        )
+        args = (deltas1, deltas2) if self.second_order else (deltas1,)
+
+        logger.info(msg, *args)
         logger.info("Estimating function value and gradient with %d resamplings.", num_samples)
 
         for i in range(num_samples):
@@ -736,6 +745,8 @@ class SPSA(StepwiseOptimizer):
             num_samples,
             **kwargs,
         )
+        
+        logger.log(VERBOSE_LEVEL, "Estimated loss: %.8g", fx_estimate)
 
         active_solver = self._active_lse_solver if lse_solver is None else lse_solver
 
@@ -801,19 +812,19 @@ class SPSA(StepwiseOptimizer):
             if norm > 1:
                 grad = grad / norm
                 
-        logger.info("Gradient was estimated as %s", grad)
+        logger.info("Normalized gradient was estimated as %s", grad)
 
         if self.lr_iterator is None:
             self._create_iterators(fun=fun, x0=x, n_start=max(iteration - 1, 0), **kwargs)
 
         learn_rate = next(self.lr_iterator)
-        logger.debug("Learning rate for this iteration is %s", learn_rate)
+        logger.log(VERBOSE_LEVEL, "Learning rate for this iteration is %s", learn_rate)
         
         update = grad * learn_rate
         x_next = np.asarray(x, dtype=float) - update
         fx_next = None
         
-        logger.debug("Proposed next point is: %s", x_next)
+        logger.log(VERBOSE_LEVEL, "Proposed next point is: %s", x_next)
 
         if self.blocking:
             if fun_next is None:
@@ -1001,7 +1012,8 @@ class SPSA(StepwiseOptimizer):
                     )
                     break
                 
-            logger.debug(
+            logger.log(
+                VERBOSE_LEVEL,
                 "Iteration %s/%s done in %s.", self._steps_in_run, self.maxiter + 1, time() - start_time
                 )
 
@@ -1139,9 +1151,11 @@ def _batch_evaluate(
         results = []
         for point in points:
             if unpack_points:
-                results.append(function(*point, **kwargs))
+                val = function(*point, **kwargs)
             else:
-                results.append(function(point, **kwargs))
+                val = function(point, **kwargs)
+            logger.log(VERBOSE_LEVEL, "Evaluated cost function at point %s: %s", point, val)
+            results.append(val)
         return results
 
     num_points = len(points)
@@ -1155,10 +1169,12 @@ def _batch_evaluate(
     for batch in batched_points:
         if unpack_points:
             repacked = _repack_points(batch)
-            results.extend(_as_list(function(*repacked, **kwargs)))
+            batch_results = _as_list(function(*repacked, **kwargs))
         else:
-            results.extend(_as_list(function(batch, **kwargs)))
+            batch_results = _as_list(function(batch, **kwargs))
 
+        logger.log(VERBOSE_LEVEL, "Evaluated batch of %d points; results: %s", len(batch), batch_results)
+        results.extend(batch_results)    
     return results
 
 
