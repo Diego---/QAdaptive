@@ -48,12 +48,13 @@ class AdaptiveAnsatz:
         else:
             incorrect_gate_names = [gate_name for gate_name in operator_pool 
                                     if gate_name not in INSTRUCTION_MAP]
-            assert not incorrect_gate_names,(
-                f"The following gates are not part of the starndard gates: {incorrect_gate_names}"
-            )
+            if incorrect_gate_names:
+                raise ValueError(
+                    f"The following gates are not standard gates: {incorrect_gate_names}"
+                )
             
-        self.operator_pool = operator_pool
-        self.block_pool = DEFAULT_BLOCK_POOL if block_pool is None else block_pool
+        self.operator_pool = list(operator_pool)
+        self.block_pool = dict(DEFAULT_BLOCK_POOL if block_pool is None else block_pool)
         self.track_history = track_history
         
         ansatz_no_barriers = RemoveBarriers()(initial_ansatz)
@@ -173,6 +174,28 @@ class AdaptiveAnsatz:
         new_params = [Parameter(f"θ_{i}") for i in range(start, start + n)]
         self.params.extend(new_params)
         return new_params
+    
+    def extend_operator_pool(self, operators: list[str]) -> None:
+        """
+        Add gates to the existing operator pool.
+
+        Parameters
+        ----------
+        operators : list[str] | tuple[str, ...]
+            List of operators to be added to the operator pool.
+        """
+        incorrect_gate_names = [
+            gate_name
+            for gate_name in operators
+            if gate_name not in INSTRUCTION_MAP
+        ]
+
+        if incorrect_gate_names:
+            raise ValueError(
+                f"The following gates are not standard gates: {incorrect_gate_names}"
+            )
+
+        self.operator_pool.extend(operators)
         
     def add_gate_at_index(self, gate_name: str, index: int, qubits: list[int] | list[Qubit]) -> None:
         """
