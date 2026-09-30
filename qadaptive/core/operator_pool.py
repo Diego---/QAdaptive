@@ -1,10 +1,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from functools import partial
+from typing import Callable, Literal, Sequence
 
 from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter
+
+
+BlockBuilder = Callable[[list[Parameter]], QuantumCircuit]
+
+RotationGate = Literal["rx", "ry", "rz"]
+FixedEntangler = Literal["cx", "cz"]
+ParametrizedEntangler = Literal["rxx", "ryy", "rzz"]
+GateName = RotationGate | FixedEntangler | ParametrizedEntangler
+
+# An operation is (gate_name, qubits), e.g. ("rx", (0,)) or ("cz", (0, 1)).
+Op = tuple[GateName, tuple[int, ...]]
+
+
+# Gate name -> number of qubits it acts on.
+_PARAMETRIZED_GATE_ARITY: dict[ParametrizedEntangler | RotationGate, int] = {
+    "rx": 1,
+    "ry": 1,
+    "rz": 1,
+    "rxx": 2,
+    "ryy": 2,
+    "rzz": 2,
+}
+
+_FIXED_GATE_ARITY: dict[FixedEntangler, int] = {
+    "cx": 2,
+    "cz": 2,
+}
 
 
 @dataclass(frozen=True)
@@ -20,7 +48,7 @@ class PoolBlock:
         Number of qubits the block acts on.
     num_parameters : int
         Number of free parameters introduced by the block.
-    builder : Callable[[list[Parameter]], QuantumCircuit]
+    builder : BlockBuilder
         Function that returns a QuantumCircuit implementing the block when
         given a list of fresh parameters.
     """
@@ -28,7 +56,7 @@ class PoolBlock:
     name: str
     num_qubits: int
     num_parameters: int
-    builder: Callable[[list[Parameter]], QuantumCircuit]
+    builder: BlockBuilder
 
     def build(self, params: list[Parameter]) -> QuantumCircuit:
         """
@@ -43,261 +71,358 @@ class PoolBlock:
         -------
         QuantumCircuit
             Circuit implementing the block.
+
+        Raises
+        ------
+        ValueError
+            If the number of provided parameters does not match the number
+            expected by the block.
         """
         if len(params) != self.num_parameters:
             raise ValueError(
                 f"Block '{self.name}' expects {self.num_parameters} parameters, "
                 f"but got {len(params)}."
             )
+
         return self.builder(params)
 
-def _build_rz_rx_rz(params: list[Parameter]) -> QuantumCircuit:
-    """
-    One-qubit Euler block.
 
-    This is not identity for arbitrary parameters, but it is identity when all
-    three parameters are initialized to zero.
+# Generic builder
+def _build_from_ops(
+    params: list[Parameter],
+    *,
+    num_qubits: int,
+    ops: tuple[Op, ...],
+    name: str,
+) -> QuantumCircuit:
     """
-    qc = QuantumCircuit(1, name="rz_rx_rz")
-    qc.rz(params[0], 0)
-    qc.rx(params[1], 0)
-    qc.rz(params[2], 0)
+    Build a circuit from an operation specification.
+
+    Parametrized gates consume one parameter each, in the order in which they
+    appear in ``ops``. Fixed gates consume no parameters.
+
+    Parameters
+    ----------
+    params : list[Parameter]
+        Parameters consumed by parametrized gates in operation order.
+    num_qubits : int
+        Number of qubits in the resulting circuit.
+    ops : tuple[Op, ...]
+        Ordered operation specification.
+    name : str
+        Name assigned to the resulting circuit.
+
+    Returns
+    -------
+    QuantumCircuit
+        Circuit implementing the operation specification.
+    """
+    qc = QuantumCircuit(num_qubits, name=name)
+    param_iter = iter(params)
+
+    for gate, qubits in ops:
+        method = getattr(qc, gate)
+
+        if gate in _PARAMETRIZED_GATE_ARITY:
+            method(next(param_iter), *qubits)
+        else:
+            method(*qubits)
+
     return qc
 
-def _build_cx_identity(params: list[Parameter]) -> QuantumCircuit:
+
+def make_block(
+    name: str,
+    num_qubits: int,
+    ops: Sequence[Op],
+) -> PoolBlock:
     """
-    Two-qubit identity-initializable block.
+    Create a PoolBlock from an operation specification.
 
-    The block is
-        RY(a) on q0
-        RZ(b) on q0
-        CX(0, 1)
-        RY(c) on q1
-        RZ(d) on q1
-        CX(0, 1)
-        
-    For all parameters initialized to zero, the block is exactly identity.
+    The operation specification is validated at construction time, and the
+    number of free parameters is derived automatically from the parametrized
+    gates appearing in ``ops``.
+
+    Parameters
+    ----------
+    name : str
+        Name of the block. The same name is assigned to the built circuit.
+    num_qubits : int
+        Number of qubits the block acts on.
+    ops : Sequence[Op]
+        Ordered sequence of ``(gate_name, qubits)`` operations.
+
+    Returns
+    -------
+    PoolBlock
+        Validated block with a picklable ``functools.partial`` builder.
+
+    Raises
+    ------
+    ValueError
+        If ``num_qubits`` is invalid, a gate is unknown, the number of qubits
+        supplied to a gate does not match its arity, a gate acts repeatedly on
+        the same qubit, or a qubit index is out of range.
     """
-    qc = QuantumCircuit(2, name="cx_identity")
-    qc.ry(params[0], 0)
-    qc.rz(params[1], 0)
-    qc.cx(0, 1)
-    qc.ry(params[2], 1)
-    qc.rz(params[3], 1)
-    qc.cx(0, 1)
-    return qc
+    if num_qubits < 1:
+        raise ValueError(
+            f"Block '{name}': num_qubits must be at least 1, got {num_qubits}."
+        )
 
-def _build_cz_identity(params: list[Parameter]) -> QuantumCircuit:
+    normalized_ops: tuple[Op, ...] = tuple(
+        (gate, tuple(qubits)) for gate, qubits in ops
+    )
+
+    for gate, qubits in normalized_ops:
+        arity = _PARAMETRIZED_GATE_ARITY.get(
+            gate, _FIXED_GATE_ARITY.get(gate)
+        )
+
+        if arity is None:
+            raise ValueError(f"Block '{name}': unknown gate '{gate}'.")
+
+        if len(qubits) != arity or len(set(qubits)) != arity:
+            raise ValueError(
+                f"Block '{name}': gate '{gate}' needs {arity} distinct "
+                f"qubit(s), got {qubits}."
+            )
+
+        if any(q < 0 or q >= num_qubits for q in qubits):
+            raise ValueError(
+                f"Block '{name}': qubits {qubits} out of range for "
+                f"{num_qubits} qubit(s)."
+            )
+
+    num_parameters = sum(
+        gate in _PARAMETRIZED_GATE_ARITY
+        for gate, _ in normalized_ops
+    )
+
+    return PoolBlock(
+        name=name,
+        num_qubits=num_qubits,
+        num_parameters=num_parameters,
+        builder=partial(
+            _build_from_ops,
+            num_qubits=num_qubits,
+            ops=normalized_ops,
+            name=name,
+        ),
+    )
+
+
+# Operation-spec helpers
+def rotations(
+    gates: Sequence[RotationGate],
+    qubit: int,
+) -> list[Op]:
     """
-    Two-qubit identity-initializable block.
+    Create a sequence of single-qubit rotations acting on one qubit.
 
-    The block is
-        RX(a) on q0
-        RY(b) on q0
-        CZ(0, 1)
-        RX(c) on q1
-        RY(d) on q1
-        CZ(0, 1)
+    Each gate in ``gates`` becomes one operation on ``qubit``, in the given
+    order. Each rotation consumes one parameter when the block is built.
 
-    For all parameters initialized to zero, the block is exactly identity.
+    Parameters
+    ----------
+    gates : Sequence[RotationGate]
+        Rotation gates to apply, in order, e.g. ``("rx", "ry")``.
+    qubit : int
+        Index of the qubit the rotations act on.
+
+    Returns
+    -------
+    list[Op]
+        Ordered operation specification, one ``(gate, (qubit,))`` entry
+        per gate.
+
+    Examples
+    --------
+    >>> rotations(("rx", "ry"), 0)
+    [('rx', (0,)), ('ry', (0,))]
     """
-    qc = QuantumCircuit(2, name="cz_identity")
-    qc.rx(params[0], 0)
-    qc.ry(params[1], 0)
-    qc.cz(0, 1)
-    qc.rx(params[2], 1)
-    qc.ry(params[3], 1)
-    qc.cz(0, 1)
-    return qc
+    return [(gate, (qubit,)) for gate in gates]
 
-def _build_cz_identity_rotation_on_one_qubit(params: list[Parameter]) -> QuantumCircuit:
+
+def sandwich(
+    entangler: FixedEntangler,
+    gates: Sequence[RotationGate],
+    *,
+    control: int = 0,
+    target: int = 1,
+    middle_qubit: int | None = None,
+    close: bool = True,
+) -> list[Op]:
     """
-    Two-qubit identity-initializable block.
+    Create a fixed-entangler sandwich.
 
-    The block is
-        RX(a) on q0
-        RY(b) on q0
-        CZ(0, 1)
-        RX(c) on q0
-        RY(d) on q0
-        CZ(0, 1)
+    The operation sequence is
 
-    For all parameters initialized to zero, the block is exactly identity.
+        rotations on ``control``
+        entangler(control, target)
+        rotations on ``middle_qubit``
+        [entangler(control, target)]
+
+    where ``middle_qubit`` defaults to ``target`` and the final entangler is
+    included when ``close=True``.
+
+    For self-inverse entanglers such as CX and CZ, ``close=True`` makes the
+    block exactly identity when all rotation parameters are zero.
+
+    With ``close=False``, the remaining bare entangler is generally not the
+    identity unitary. It may nevertheless preserve a chosen reference state;
+    for example, CX and CZ both leave |00> unchanged.
+
+    Parameters
+    ----------
+    entangler : FixedEntangler
+        Fixed two-qubit entangling gate.
+    gates : Sequence[RotationGate]
+        Rotation gates applied before and after the entangler.
+    control : int, default=0
+        First qubit of the entangling gate and qubit receiving the first
+        rotation sequence.
+    target : int, default=1
+        Second qubit of the entangling gate.
+    middle_qubit : int or None, default=None
+        Qubit receiving the second rotation sequence. If ``None``, ``target``
+        is used.
+    close : bool, default=True
+        Whether to append the fixed entangler a second time.
+
+    Returns
+    -------
+    list[Op]
+        Ordered operation specification.
     """
-    qc = QuantumCircuit(2, name="cz_identity")
-    qc.rx(params[0], 0)
-    qc.ry(params[1], 0)
-    qc.cz(0, 1)
-    qc.rx(params[2], 0)
-    qc.ry(params[3], 0)
-    qc.cz(0, 1)
-    return qc
+    middle = target if middle_qubit is None else middle_qubit
 
-def _build_big_cz_identity(params: list[Parameter]) -> QuantumCircuit:
-    """
-    Two-qubit identity-initializable block.
+    ops: list[Op] = [
+        (entangler, (control, target)),
+        *rotations(gates, control),
+        *rotations(gates, middle),
+    ]
 
-    The block is
-        RX(a) on q0
-        RY(b) on q0
-        CZ(0, 1)
-        RX(c) on q1
-        RY(d) on q1
-        CZ(0, 1)
-        RX(e) on q0
-        RY(f) on q0
-        RX(g) on q1
-        RY(h) on q1
+    if close:
+        ops.append((entangler, (control, target)))
 
-    For all parameters initialized to zero, the block is exactly identity.
-    """
-    qc = QuantumCircuit(3, name="big_cz_identity")
-    qc.rx(params[0], 0)
-    qc.ry(params[1], 0)
-    qc.cz(0, 1)
-    qc.rx(params[2], 0)
-    qc.ry(params[3], 0)
-    qc.cz(0, 2)
-    qc.rx(params[4], 0)
-    qc.ry(params[5], 0)
-    qc.cz(0, 1)
-    qc.rx(params[6], 0)
-    qc.ry(params[7], 0)
-    qc.cz(0, 2)
-    qc.rx(params[8], 0)
-    qc.ry(params[9], 0)
-    return qc
+    return ops
 
-def _build_single_rxx_block(params: list[Parameter]) -> QuantumCircuit:
-    """
-    Two-qubit identity-initializable block.
 
-    The block is
-        RZ(a) on q0
-        RXX(b) on (q0, q1)
-        RZ(c) on q1
+# Default pool
+_RXRY: tuple[RotationGate, ...] = ("rx", "ry")
+_RYRZ: tuple[RotationGate, ...] = ("ry", "rz")
 
-    For all parameters initialized to zero, the is the identity.
-    """
-    qc = QuantumCircuit(2, name="single_cx_block")
-    qc.rz(params[0], 0)
-    qc.rxx(params[1], 0, 1)
-    qc.rz(params[2], 0)
-    return qc
+_BLOCKS: tuple[PoolBlock, ...] = (
+    # One-qubit Euler block; identity when all angles are zero.
+    make_block(
+        "rz_rx_rz",
+        1,
+        rotations(("rz", "rx", "rz"), 0),
+    ),
 
-def _build_single_rzz_block(params: list[Parameter]) -> QuantumCircuit:
-    """
-    Two-qubit identity-initializable block.
+    # Identity-initializable two-qubit blocks.
+    make_block(
+        "cx_identity",
+        2,
+        sandwich("cx", _RYRZ),
+    ),
+    make_block(
+        "cz_identity",
+        2,
+        sandwich("cz", _RXRY),
+    ),
+    make_block(
+        "cz_identity_rotation_on_one_qubit",
+        2,
+        sandwich("cz", _RXRY, middle_qubit=0),
+    ),
 
-    The block is
-        RX(a) on q0
-        RZZ(b) on (q0, q1)
-        RX(c) on q1
+    # Identity-initializable three-qubit blocks.
+    #
+    # At zero rotation angles, the entangler sequence is
+    #
+    #     E(0, 1) E(0, 2) E(0, 1) E(0, 2),
+    #
+    # which reduces to identity for the CX and CZ choices below.
+    make_block(
+        "big_cx_identity",
+        3,
+        [
+            *rotations(_RYRZ, 0),
+            ("cx", (0, 1)),
+            *rotations(_RYRZ, 0),
+            ("cx", (0, 2)),
+            *rotations(_RYRZ, 0),
+            ("cx", (0, 1)),
+            *rotations(_RYRZ, 0),
+            ("cx", (0, 2)),
+            *rotations(_RYRZ, 0),
+        ],
+    ),
+    make_block(
+        "big_cz_identity",
+        3,
+        [
+            *rotations(_RXRY, 0),
+            ("cz", (0, 1)),
+            *rotations(_RXRY, 0),
+            ("cz", (0, 2)),
+            *rotations(_RXRY, 0),
+            ("cz", (0, 1)),
+            *rotations(_RXRY, 0),
+            ("cz", (0, 2)),
+            *rotations(_RXRY, 0),
+        ],
+    ),
 
-    For all parameters initialized to zero, the block is the identity.
-    """
-    qc = QuantumCircuit(2, name="single_cz_block")
-    qc.rx(params[0], 0)
-    qc.rzz(params[1], 0, 1)
-    qc.rx(params[2], 0)
-    return qc
+    # Single fixed-entangler blocks.
+    #
+    # These are not identity unitaries at zero angles: the block reduces to a
+    # bare CX or CZ. They nevertheless preserve |00>, so they can be inserted
+    # at the beginning of a VQE ansatz initialized in the computational zero
+    # without changing that reference state.
+    make_block(
+        "single_cx_block",
+        2,
+        sandwich(
+            "cx", 
+            ("rz", "ry"), 
+            close=False
+        ),
+    ),
+    make_block(
+        "single_cz_block",
+        2,
+        sandwich(
+            "cz",
+            ("ry", "rx"),
+            close=False,
+        ),
+    ),
 
-def _build_single_cx_block(params: list[Parameter]) -> QuantumCircuit:
-    """
-    Two-qubit non-identity-initializable block.
-
-    The block is
-        RZ(b) on q0
-        RX(c) on q0
-        CX(0, 1)
-        RZ(d) on q1
-        RX(e) on q1
-
-    For all parameters initialized to zero, the block is a CX.
-    """
-    qc = QuantumCircuit(2, name="single_cx_block")
-    qc.rz(params[0], 0)
-    qc.ry(params[1], 0)
-    qc.cx(0, 1)
-    qc.rz(params[2], 1)
-    qc.ry(params[3], 1)
-    return qc
-
-def _build_single_cz_block(params: list[Parameter]) -> QuantumCircuit:
-    """
-    Two-qubit non-identity-initializable block.
-
-    The block is
-        RY(b) on q0
-        RX(c) on q0
-        CZ(0, 1)
-        RY(d) on q1
-        RX(e) on q1
-
-    For all parameters initialized to zero, the block is a CZ.
-    """
-    qc = QuantumCircuit(2, name="single_cz_block")
-    qc.ry(params[0], 0)
-    qc.rx(params[1], 0)
-    qc.cz(0, 1)
-    qc.ry(params[2], 0)
-    qc.rx(params[3], 0)
-    return qc
+    # Blocks with a parametrized two-qubit rotation. All gates reduce to
+    # identity at zero angle, so the complete blocks are identity-initializable.
+    make_block(
+        "single_rxx_block",
+        2,
+        [
+            ("rz", (0,)),
+            ("rxx", (0, 1)),
+            ("rz", (0,)),
+        ],
+    ),
+    make_block(
+        "single_rzz_block",
+        2,
+        [
+            ("rx", (0,)),
+            ("rzz", (0, 1)),
+            ("rx", (0,)),
+        ],
+    ),
+)
 
 
 DEFAULT_BLOCK_POOL: dict[str, PoolBlock] = {
-    "rz_rx_rz": PoolBlock(
-        name="rz_rx_rz",
-        num_qubits=1,
-        num_parameters=3,
-        builder=_build_rz_rx_rz,
-    ),
-    "cx_identity": PoolBlock(
-        name="cx_identity",
-        num_qubits=2,
-        num_parameters=4,
-        builder=_build_cx_identity,
-    ),
-    "cz_identity": PoolBlock(
-        name="cz_identity",
-        num_qubits=2,
-        num_parameters=4,
-        builder=_build_cz_identity
-    ),
-    "cz_identity_rotation_on_one_qubit": PoolBlock(
-        name="cz_identity_rotation_on_one_qubit",
-        num_qubits=2,
-        num_parameters=4,
-        builder=_build_cz_identity_rotation_on_one_qubit
-    ),
-    "big_cz_identity": PoolBlock(
-        name="big_cz_identity",
-        num_qubits=3,
-        num_parameters=10,
-        builder=_build_big_cz_identity
-    ),
-    "single_cx_block": PoolBlock(
-        name="single_cx_block",
-        num_qubits=2,
-        num_parameters=4,
-        builder=_build_single_cx_block,
-    ),
-    "single_cz_block": PoolBlock(
-        name="single_cz_block",
-        num_qubits=2,
-        num_parameters=4,
-        builder=_build_single_cz_block,
-    ),
-    "single_rxx_block": PoolBlock(
-        name="single_rxx_block",
-        num_qubits=2,
-        num_parameters=3,
-        builder=_build_single_rxx_block,
-    ),
-    "single_rzz_block": PoolBlock(
-        name="single_rzz_block",
-        num_qubits=2,
-        num_parameters=3,
-        builder=_build_single_rzz_block,
-    ),
+    block.name: block for block in _BLOCKS
 }

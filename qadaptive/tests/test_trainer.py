@@ -9,6 +9,7 @@ from qiskit_algorithms.optimizers.optimizer import (
 
 from qadaptive.training.trainer import InnerLoopTrainer
 from qadaptive.training.optimizers.stepwise_optimizer import StepwiseOptimizer
+from qadaptive.training.recorder import InnerLoopRecorder
 
 
 class DummyOptimizer(StepwiseOptimizer):
@@ -157,7 +158,8 @@ def test_step_advances_optimizer_iteration_when_update_is_applied():
 
 def test_train_one_time_returns_result_and_tracks_gradients():
     optimizer = DummyOptimizer(step_size=0.1)
-    trainer = InnerLoopTrainer(optimizer=optimizer, track_gradients=True)
+    recorder = InnerLoopRecorder(record_gradients=True)
+    trainer = InnerLoopTrainer(optimizer=optimizer, recorder=recorder)
     ansatz = build_parameterized_ansatz()
 
     result = trainer.train_one_time(
@@ -173,12 +175,12 @@ def test_train_one_time_returns_result_and_tracks_gradients():
     assert trainer.last_cost == pytest.approx(1.28)
     assert np.allclose(trainer.last_params, np.array([0.8, 0.8]))
     assert len(trainer.gradient_history[0]) == 2
-    assert trainer.gradient_history[1] == []
 
 
-def test_train_one_time_records_training_run_history_when_requested():
+def test_train_one_time_records_training_run_history():
     optimizer = DummyOptimizer(step_size=0.1)
-    trainer = InnerLoopTrainer(optimizer=optimizer, track_gradients=False)
+    recorder = InnerLoopRecorder(record_gradients=False)
+    trainer = InnerLoopTrainer(optimizer=optimizer, recorder=recorder)
     ansatz = build_parameterized_ansatz()
 
     result = trainer.train_one_time(
@@ -186,7 +188,6 @@ def test_train_one_time_records_training_run_history_when_requested():
         loss_function=quadratic_loss,
         initial_point=np.array([1.0, 1.0]),
         iterations=2,
-        record_run_history=True,
         initial_value=2.0,
     )
 
@@ -201,30 +202,39 @@ def test_train_one_time_records_training_run_history_when_requested():
     assert np.allclose(record.initial_point, np.array([1.0, 1.0]))
     assert record.initial_value == pytest.approx(2.0)
     assert record.final_value == pytest.approx(result.fun)
+    assert np.allclose(record.final_params, result.x)
 
     assert len(record.iterations) == 2
 
     assert record.iterations[0].iteration == 1
+    assert record.iterations[0].nfev == 1
     assert np.allclose(record.iterations[0].params, np.array([0.9, 0.9]))
     assert record.iterations[0].value == pytest.approx(2.0)
 
     assert record.iterations[1].iteration == 2
+    assert record.iterations[1].nfev == 2
     assert np.allclose(record.iterations[1].params, np.array([0.8, 0.8]))
     assert record.iterations[1].value == pytest.approx(1.62)
 
 
-def test_train_one_time_without_history_leaves_last_training_run_record_none():
+def test_train_one_time_reuses_the_same_recorder_across_runs():
     optimizer = DummyOptimizer(step_size=0.1)
-    trainer = InnerLoopTrainer(optimizer=optimizer, track_gradients=False)
+    recorder = InnerLoopRecorder(record_gradients=False)
+    trainer = InnerLoopTrainer(optimizer=optimizer, recorder=recorder)
     ansatz = build_parameterized_ansatz()
 
-    trainer.train_one_time(
-        ansatz=ansatz,
-        loss_function=quadratic_loss,
-        initial_point=np.array([1.0, 1.0]),
-        iterations=1,
-        record_run_history=False,
-    )
+    for outer_iteration in range(2):
+        trainer.train_one_time(
+            ansatz=ansatz,
+            loss_function=quadratic_loss,
+            initial_point=np.array([1.0, 1.0]),
+            iterations=1,
+            outer_iteration=outer_iteration,
+            action=f"action_{outer_iteration}",
+        )
 
-    assert trainer.last_training_run_record is None
-    assert trainer.training_run_history == []
+    assert trainer.recorder is recorder
+    assert len(trainer.training_run_history) == 2
+    assert trainer.training_run_history[0].action == "action_0"
+    assert trainer.training_run_history[1].action == "action_1"
+    assert trainer.last_training_run_record is trainer.training_run_history[-1]

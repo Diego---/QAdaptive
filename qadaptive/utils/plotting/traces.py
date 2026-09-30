@@ -43,6 +43,12 @@ class TrainingRunTrace:
     stepsizes : np.ndarray
         Step sizes for the run, with shape ``(num_points,)``.
         If `include_initial=True`, the first entry is `np.nan`.
+    extra_values : np.ndarray
+        Periodic extra-objective values aligned with ``values``. Missing
+        evaluations are represented by ``np.nan``.
+    extra_stds : np.ndarray
+        Standard deviations for extra-objective values, aligned with
+        ``extra_values``. Missing uncertainties are represented by ``np.nan``.
     cost_after : float | None, optional
         Final objective value associated with the run.
     note : str | None, optional
@@ -59,6 +65,8 @@ class TrainingRunTrace:
     params: np.ndarray
     values: np.ndarray
     stepsizes: np.ndarray
+    extra_values: np.ndarray
+    extra_stds: np.ndarray
     cost_after: float | None = None
     note: str | None = None
 
@@ -134,6 +142,22 @@ def _iteration_stepsize_vector(record: TrainingRunRecord) -> np.ndarray:
     return np.asarray([float(iteration.stepsize) for iteration in record.iterations], dtype=float)
 
 
+def _iteration_optional_vector(
+    record: TrainingRunRecord,
+    attribute: str,
+) -> np.ndarray:
+    """Return an optional scalar iteration field with missing values as NaN."""
+    return np.asarray(
+        [
+            np.nan if getattr(iteration, attribute) is None else float(
+                getattr(iteration, attribute)
+            )
+            for iteration in record.iterations
+        ],
+        dtype=float,
+    )
+
+
 def _resolve_outer_metadata(
     record: TrainingRunRecord,
     run_index: int,
@@ -166,7 +190,7 @@ def _resolve_outer_metadata(
             outer_result.note,
         )
 
-    outer_iteration = getattr(record, "outer_iteration", run_index)
+    outer_iteration = getattr(record, "outer_iteration", None)
     action = getattr(record, "action", None)
     accepted = getattr(record, "accepted_outer_step", True)
     note = getattr(record, "note", None)
@@ -174,6 +198,9 @@ def _resolve_outer_metadata(
 
     if action is None:
         action = f"run_{run_index}"
+
+    if outer_iteration is None:
+        outer_iteration = run_index
 
     if accepted is None:
         accepted = True
@@ -257,6 +284,8 @@ def build_training_run_traces(
         iter_params = _iteration_param_matrix(record)
         iter_values = _iteration_value_vector(record)
         iter_stepsizes = _iteration_stepsize_vector(record)
+        iter_extra_values = _iteration_optional_vector(record, "extra_value")
+        iter_extra_stds = _iteration_optional_vector(record, "extra_std")
 
         if include_initial:
             if num_params == 0:
@@ -271,10 +300,14 @@ def build_training_run_traces(
             )
             values = np.concatenate(([initial_value], iter_values))
             stepsizes = np.concatenate(([np.nan], iter_stepsizes))
+            extra_values = np.concatenate(([np.nan], iter_extra_values))
+            extra_stds = np.concatenate(([np.nan], iter_extra_stds))
         else:
             params = iter_params
             values = iter_values
             stepsizes = iter_stepsizes
+            extra_values = iter_extra_values
+            extra_stds = iter_extra_stds
 
         if values.size == 0:
             raise ValueError(
@@ -303,6 +336,8 @@ def build_training_run_traces(
                 params=params,
                 values=values,
                 stepsizes=stepsizes,
+                extra_values=extra_values,
+                extra_stds=extra_stds,
                 cost_after=cost_after,
                 note=note,
             )

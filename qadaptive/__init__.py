@@ -2,14 +2,15 @@
 QAdaptive: A package for adaptive variational quantum circuits.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .core import AdaptiveAnsatz
 from .outer import MutableAnsatzExperiment
-from .training import InnerLoopTrainer
+from .training import InnerLoopRecorder, InnerLoopTrainer
 
 __all__ = [
     "AdaptiveAnsatz", 
     "MutableAnsatzExperiment", 
-    "InnerLoopTrainer"
+    "InnerLoopTrainer",
+    "InnerLoopRecorder",
     ]

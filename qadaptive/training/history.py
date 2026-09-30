@@ -11,11 +11,14 @@ class IterationRecord:
     """
 
     iteration: int
+    nfev: int
     params: np.ndarray
     value: float
     stepsize: float
     accepted: bool
     gradient: np.ndarray | None = None
+    extra_value: float | None = None
+    extra_std: float | None = None
 
 
 @dataclass
@@ -29,6 +32,7 @@ class TrainingRunRecord:
     initial_point: np.ndarray
     initial_value: float | None
     iterations: list[IterationRecord] = field(default_factory=list)
+    final_params: np.ndarray | None = None
     final_value: float | None = None
     outer_iteration: int | None = None
     action: str | None = None
