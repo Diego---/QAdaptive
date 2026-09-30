@@ -1,0 +1,214 @@
+import json
+
+import numpy as np
+from qiskit import QuantumCircuit, qpy
+from qiskit.circuit import Parameter
+from qiskit_algorithms.utils import algorithm_globals
+
+from qadaptive.core.adaptive_ansatz import AdaptiveAnsatz
+from qadaptive.outer.action_definitions import INSERT_GATE
+from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
+from qadaptive.outer.outer_loop import ActionSpec, OuterStepPlan
+from qadaptive.training.optimizers import SPSA
+from qadaptive.training.recorder import InnerLoopRecorder
+from qadaptive.training.trainer import InnerLoopTrainer
+
+
+def _read_json(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_circuit(path):
+    with path.open("rb") as file:
+        circuits = qpy.load(file)
+
+    assert len(circuits) == 1
+    return circuits[0]
+
+
+def _quadratic_loss(params, ansatz, **kwargs):
+    del ansatz, kwargs
+    return float(np.sum(np.asarray(params, dtype=float) ** 2))
+
+
+def _append_rx_plan(experiment):
+    return OuterStepPlan(
+        name="append_rx",
+        actions=[
+            ActionSpec(
+                action=INSERT_GATE,
+                kwargs={
+                    "gate": "rx",
+                    "qubits": [0],
+                    "circ_ind": len(experiment.ansatz.data),
+                },
+            )
+        ],
+        acceptance_mode="force",
+    )
+
+
+def test_save_history_preserves_accepted_run_data(tmp_path, monkeypatch):
+    """Save and read back a trained experiment with one accepted insertion."""
+    monkeypatch.setattr(algorithm_globals, "random_seed", 1234)
+
+    circuit = QuantumCircuit(2)
+    circuit.rx(Parameter("θ_0"), 0)
+    circuit.cx(0, 1)
+
+    recorder = InnerLoopRecorder(
+        record_initial_value=True,
+        record_gradients=True,
+        extra_objective=lambda params: float(np.sum(params)),
+        extra_evaluation_frequency=1,
+    )
+    trainer = InnerLoopTrainer(
+        optimizer=SPSA(learning_rate=0.1, perturbation=0.1),
+        recorder=recorder,
+    )
+    experiment = MutableAnsatzExperiment(AdaptiveAnsatz(circuit), trainer)
+
+    results = experiment.run_outer_loop(
+        loss_function=_quadratic_loss,
+        plan_schedule=[_append_rx_plan],
+        outer_iterations=1,
+        train_iterations=2,
+        initial_point=[0.5],
+        reuse_parameter_memory=True,
+    )
+
+    assert len(results) == 1
+    assert results[0].accepted is True
+    assert len(recorder.runs) == 2
+
+    output = tmp_path / "run"
+    assert experiment.save_history(output) == output
+
+    # Every declared file exists, and declared JSON files are readable.
+    manifest = _read_json(output / "manifest.json")
+
+    assert manifest["schema_version"] == 1
+    assert manifest["num_outer_steps"] == 2  # Includes initial training.
+    assert manifest["num_training_runs"] == 2
+    assert manifest["num_accepted_ansatz_records"] == 2
+
+    payloads = {}
+    for name, relative_path in manifest["files"].items():
+        path = output / relative_path
+        assert path.is_file(), f"Missing archive file: {relative_path}"
+
+        if path.suffix == ".json":
+            payloads[name] = _read_json(path)
+
+    # The circuit and saved parameter values reconstruct the final state.
+    state = payloads["current_state"]
+    circuit_path = manifest["files"]["current_ansatz_qpy"]
+    saved_circuit = _load_circuit(output / circuit_path)
+
+    assert state["current_ansatz_qpy"] == circuit_path
+    assert saved_circuit == experiment.ansatz
+    assert [p.name for p in saved_circuit.parameters] == [
+        p.name for p in experiment.ansatz.parameters
+    ]
+    assert state["last_cost"] == experiment.last_cost
+    np.testing.assert_array_equal(
+        state["last_params"],
+        experiment.last_params,
+    )
+    assert (
+        state["current_parameter_dict"]
+        == experiment.get_current_parameter_dict()
+    )
+
+    bound_circuit = saved_circuit.assign_parameters(
+        {
+            p: state["current_parameter_dict"][p.name]
+            for p in saved_circuit.parameters
+        }
+    )
+    expected_bound_circuit = experiment.ansatz.assign_parameters(
+        experiment.last_params
+    )
+
+    assert bound_circuit.num_parameters == 0
+    assert bound_circuit == expected_bound_circuit
+
+    # Both inner runs retain their numerical data and outer-loop metadata.
+    saved_runs = payloads["training_run_history"]
+    assert len(saved_runs) == len(recorder.runs)
+
+    for saved_run, run in zip(saved_runs, recorder.runs):
+        for field in (
+            "run_index",
+            "param_names",
+            "initial_value",
+            "final_value",
+            "outer_iteration",
+            "action",
+            "accepted_outer_step",
+            "note",
+        ):
+            assert saved_run[field] == getattr(run, field)
+
+        np.testing.assert_array_equal(
+            saved_run["initial_point"], run.initial_point
+        )
+        np.testing.assert_array_equal(
+            saved_run["final_params"], run.final_params
+        )
+
+        assert len(run.iterations) == 2
+        assert len(saved_run["iterations"]) == len(run.iterations)
+
+        for saved_step, step in zip(saved_run["iterations"], run.iterations):
+            for field in (
+                "iteration",
+                "nfev",
+                "value",
+                "stepsize",
+                "accepted",
+                "extra_value",
+                "extra_std",
+            ):
+                assert saved_step[field] == getattr(step, field)
+
+            assert step.gradient is not None
+            assert step.extra_value is not None
+
+            np.testing.assert_array_equal(saved_step["params"], step.params)
+            np.testing.assert_array_equal(saved_step["gradient"], step.gradient)
+
+    assert payloads["outer_step_history"] == [
+        vars(record) for record in experiment.outer_step_history
+    ]
+
+    # Accepted snapshots preserve their circuits and parameter values.
+    saved_accepted = payloads["accepted_ansatz_history"]
+    assert len(saved_accepted) == len(experiment.accepted_ansatz_history) == 2
+
+    for saved, record in zip(
+        saved_accepted, experiment.accepted_ansatz_history
+    ):
+        assert _load_circuit(output / saved["qpy_file"]) == record.ansatz
+        assert saved["parameter_values"] == record.parameter_values
+        assert saved["cost"] == record.cost
+        assert saved["num_parameters"] == record.num_parameters
+        assert saved["num_two_qubit_gates"] == record.num_two_qubit_gates == 1
+
+    # The attempted structural change preserves both circuit snapshots.
+    saved_trials = payloads["trial_ansatz_history"]
+    assert len(saved_trials) == len(experiment.trial_ansatz_history) == 1
+
+    saved_trial = saved_trials[0]
+    trial = experiment.trial_ansatz_history[0]
+
+    assert saved_trial["accepted"] is True
+    assert (
+        _load_circuit(output / saved_trial["before_qpy_file"])
+        == trial["ansatz_before"]
+    )
+    assert (
+        _load_circuit(output / saved_trial["after_qpy_file"])
+        == trial["ansatz_after"]
+    )
+    assert saved_trial["parameter_values"] == trial["parameter_values"]

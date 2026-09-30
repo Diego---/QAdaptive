@@ -44,7 +44,7 @@ def test_cx_identity_block_metadata_and_structure_are_consistent():
     assert block.num_parameters == 4
     assert qc.num_qubits == 2
     assert qc.num_parameters == 4
-    assert operation_names(qc) == ['ry', 'rz', 'cx', 'ry', 'rz', 'cx']
+    assert operation_names(qc) == ['cx', 'ry', 'rz', 'ry', 'rz', 'cx']
 
 
 
@@ -66,4 +66,4 @@ def test_cz_identity_block_structure_matches_documented_pattern():
     params = ParameterVector("t", block.num_parameters)
     qc = block.build(list(params))
 
-    assert operation_names(qc) == ['rx', 'ry', 'cz', 'rx', 'ry', 'cz']
+    assert operation_names(qc) == ['cz', 'rx', 'ry', 'rx', 'ry', 'cz']
