@@ -898,7 +898,7 @@ class MutableAnsatzExperiment:
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
             Whether to build the retraining initial point from `parameter_memory`
-            when `initial_point` is not provided.
+            when `initial_point_generator` is not provided.
         default_value_for_new_params : float, optional
             Default value for parameters not yet present in `parameter_memory`.
         record_parameter_memory : bool, optional
@@ -1240,7 +1240,7 @@ class MutableAnsatzExperiment:
             Whether to update the live parameter cache after retraining.
         reuse_parameter_memory : bool, optional
             Whether to use `parameter_memory` to initialize retraining when
-            `initial_point` is not provided.
+            `initial_point_generator` is not provided.
         default_value_for_new_params : float, optional
             Default value assigned to newly introduced parameters when warm-starting.
         record_parameter_memory : bool, optional
