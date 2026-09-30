@@ -232,6 +232,19 @@ def test_save_history_preserves_accepted_run_data(tmp_path, monkeypatch):
 
     for name, payload in payloads.items():
         assert getattr(loaded, name) == payload
+        
+    for index, record in enumerate(experiment.accepted_ansatz_history):
+        assert loaded.load_accepted_ansatz(index) == record.ansatz
+
+    for index, record in enumerate(experiment.trial_ansatz_history):
+        assert (
+            loaded.load_trial_ansatz(index, stage="before")
+            == record["ansatz_before"]
+        )
+        assert (
+            loaded.load_trial_ansatz(index, stage="after")
+            == record["ansatz_after"]
+        )
 
 def test_save_history_preserves_rejected_trial_and_accepted_state(
     tmp_path, monkeypatch
@@ -383,6 +396,10 @@ def test_save_history_preserves_rejected_trial_and_accepted_state(
     assert loaded.last_cost == accepted_cost
     np.testing.assert_array_equal(loaded.last_params, accepted_params)
     assert loaded.trial_ansatz_history[-1]["accepted"] is False
+    
+    assert loaded.load_accepted_ansatz() == accepted_circuit
+    assert loaded.load_trial_ansatz(stage="before") == accepted_circuit
+    assert loaded.load_trial_ansatz() == rejected_circuit
     
 def test_failed_json_write_preserves_existing_file(tmp_path):
     path = tmp_path / "history.json"

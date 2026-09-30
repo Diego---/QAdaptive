@@ -10,6 +10,15 @@ import qiskit.qpy as qpy
 from qiskit.circuit import QuantumCircuit
 
 
+def _load_single_circuit(path: Path) -> QuantumCircuit:
+    with path.open("rb") as file:
+        circuits = qpy.load(file)
+
+    if len(circuits) != 1:
+        raise ValueError(f"QPY file must contain exactly one circuit: {path}")
+
+    return circuits[0]
+
 @dataclass
 class LoadedExperimentHistory:
     directory: Path
@@ -32,13 +41,33 @@ class LoadedExperimentHistory:
     @property
     def last_cost(self) -> float | None:
         return self.current_state["last_cost"]
+    
+    def load_accepted_ansatz(self, index: int = -1) -> QuantumCircuit:
+        """Load an accepted architecture snapshot; default to the latest."""
+        record = self.accepted_ansatz_history[index]
+        return _load_single_circuit(self.directory / record["qpy_file"])
+
+    def load_trial_ansatz(
+        self,
+        index: int = -1,
+        *,
+        stage: str = "after",
+    ) -> QuantumCircuit:
+        """Load a trial circuit before or after its structural changes."""
+        if stage not in ("before", "after"):
+            raise ValueError("stage must be 'before' or 'after'.")
+
+        record = self.trial_ansatz_history[index]
+        return _load_single_circuit(
+            self.directory / record[f"{stage}_qpy_file"]
+        )
 
 
 def load_experiment_history(
     directory: str | Path,
 ) -> LoadedExperimentHistory:
     """Load the saved current circuit, parameter values, and JSON histories."""
-    directory = Path(directory)
+    directory = Path(directory).resolve()
 
     with (directory / "manifest.json").open("r", encoding="utf-8") as file:
         manifest = json.load(file)
@@ -68,17 +97,14 @@ def load_experiment_history(
         with path.open("r", encoding="utf-8") as file:
             payloads[name] = json.load(file)
 
-    circuit_path = directory / manifest["files"]["current_ansatz_qpy"]
-    with circuit_path.open("rb") as file:
-        circuits = qpy.load(file)
-
-    if len(circuits) != 1:
-        raise ValueError("Current ansatz QPY must contain exactly one circuit.")
+    ansatz = _load_single_circuit(
+        directory / manifest["files"]["current_ansatz_qpy"]
+    )
 
     history = LoadedExperimentHistory(
         directory=directory,
         manifest=manifest,
-        ansatz=circuits[0],
+        ansatz=ansatz,
         **payloads,
     )
 
