@@ -11,6 +11,7 @@ from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
 from qadaptive.outer.outer_loop import ActionSpec, OuterStepPlan
 from qadaptive.persistence import history as persistence_history
 from qadaptive.persistence.loading import load_experiment_history
+from qadaptive.reporting.summary import build_experiment_summary
 from qadaptive.training.optimizers import SPSA
 from qadaptive.training.recorder import InnerLoopRecorder
 from qadaptive.training.trainer import InnerLoopTrainer
@@ -50,7 +51,9 @@ def _append_rx_plan(experiment):
     )
 
 
-def test_save_history_preserves_accepted_run_data(tmp_path, monkeypatch):
+def test_save_history_preserves_accepted_run_data(
+    tmp_path, monkeypatch, capsys
+    ):
     """Save and read back a trained experiment with one accepted insertion."""
     monkeypatch.setattr(algorithm_globals, "random_seed", 1234)
 
@@ -245,6 +248,24 @@ def test_save_history_preserves_accepted_run_data(tmp_path, monkeypatch):
             loaded.load_trial_ansatz(index, stage="after")
             == record["ansatz_after"]
         )
+        
+    summary = build_experiment_summary(experiment)
+
+    assert summary == build_experiment_summary(loaded)
+    assert summary["num_outer_proposals"] == 1
+    assert summary["num_accepted_proposals"] == 1
+    assert summary["num_rejected_proposals"] == 0
+    assert summary["num_training_runs"] == 2
+    assert summary["num_recorded_inner_steps"] == 4
+    assert summary["optimizer_nfev"] == 8
+
+    capsys.readouterr()
+    experiment.print_summary()
+    live_output = capsys.readouterr().out
+
+    loaded.print_summary()
+    assert capsys.readouterr().out == live_output
+    assert "Structural proposals: 1 (accepted: 1, rejected: 0)" in live_output
 
 def test_save_history_preserves_rejected_trial_and_accepted_state(
     tmp_path, monkeypatch
@@ -401,6 +422,19 @@ def test_save_history_preserves_rejected_trial_and_accepted_state(
     assert loaded.load_trial_ansatz(stage="before") == accepted_circuit
     assert loaded.load_trial_ansatz() == rejected_circuit
     
+    summary = build_experiment_summary(experiment)
+
+    assert summary == build_experiment_summary(loaded)
+    assert summary["num_outer_proposals"] == 2
+    assert summary["num_accepted_proposals"] == 1
+    assert summary["num_rejected_proposals"] == 1
+    assert summary["num_training_runs"] == 3
+    assert summary["num_recorded_inner_steps"] == 5
+    assert summary["last_cost"] == accepted_cost
+    assert summary["num_parameters"] == 2
+    assert summary["num_two_qubit_instructions"] == 1
+    assert summary["optimizer_nfev"] == 10
+    
 def test_failed_json_write_preserves_existing_file(tmp_path):
     path = tmp_path / "history.json"
     path.write_text('{"original": true}\n', encoding="utf-8")
@@ -512,3 +546,20 @@ def test_load_history_rejects_unknown_schema(tmp_path):
 
     with pytest.raises(ValueError, match="Unsupported archive schema version"):
         load_experiment_history(output)
+
+def test_summary_handles_untrained_and_untracked_data(capsys):
+    experiment = _make_untrained_experiment()
+    summary = build_experiment_summary(experiment)
+
+    assert summary["last_cost"] is None
+    assert summary["num_training_runs"] == 0
+    assert summary["num_outer_proposals"] == 0
+
+    experiment.result_history = None
+    assert build_experiment_summary(experiment)["optimizer_nfev"] is None
+
+    experiment.print_summary()
+    output = capsys.readouterr().out
+
+    assert "Current cost: N/A" in output
+    assert "Optimizer nfev (completed results): N/A" in output

@@ -2107,6 +2107,12 @@ class MutableAnsatzExperiment:
             When attempting to overwrite an existing manifest.json file.
         """
         return save_experiment_history(self, directory)
+    
+    def print_summary(self) -> None:
+        """Print a compact summary of recorded experiment data."""
+        from qadaptive.reporting.summary import print_experiment_summary
+
+        print_experiment_summary(self)
 
     @property
     def optimizer(self):

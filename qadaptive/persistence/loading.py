@@ -61,6 +61,12 @@ class LoadedExperimentHistory:
         return _load_single_circuit(
             self.directory / record[f"{stage}_qpy_file"]
         )
+        
+    def print_summary(self) -> None:
+        """Print a compact summary of recorded experiment data."""
+        from qadaptive.reporting.summary import print_experiment_summary
+
+        print_experiment_summary(self)
 
 
 def load_experiment_history(
