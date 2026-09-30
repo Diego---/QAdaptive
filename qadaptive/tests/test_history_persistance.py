@@ -91,6 +91,14 @@ def test_save_history_preserves_accepted_run_data(tmp_path, monkeypatch):
     assert manifest["num_outer_steps"] == 2  # Includes initial training.
     assert manifest["num_training_runs"] == 2
     assert manifest["num_accepted_ansatz_records"] == 2
+    
+    metadata = manifest["inner_loop_recorder"]
+
+    assert metadata["schema_version"] == 1
+    assert metadata["record_initial_value"] is True
+    assert metadata["record_gradients"] is True
+    assert metadata["extra_evaluation_frequency"] == 1
+    assert "runs" not in metadata
 
     payloads = {}
     for name, relative_path in manifest["files"].items():

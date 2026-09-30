@@ -154,34 +154,6 @@ def save_experiment_history(
             "note": result.note,
         }
 
-    def _serialize_training_run_record(record) -> dict:
-        return {
-            "run_index": int(record.run_index),
-            "param_names": list(record.param_names),
-            "initial_point": np.asarray(record.initial_point, dtype=float).tolist(),
-            "initial_value": None if record.initial_value is None else float(record.initial_value),
-            "final_params": None if record.final_params is None else np.asarray(record.final_params, dtype=float).tolist(),
-            "final_value": None if record.final_value is None else float(record.final_value),
-            "outer_iteration": record.outer_iteration,
-            "action": record.action,
-            "accepted_outer_step": record.accepted_outer_step,
-            "note": record.note,
-            "iterations": [
-                {
-                    "iteration": int(it.iteration),
-                    "nfev": int(it.nfev),
-                    "params": np.asarray(it.params, dtype=float).tolist(),
-                    "value": float(it.value),
-                    "stepsize": float(it.stepsize),
-                    "accepted": bool(it.accepted),
-                    "gradient": None if it.gradient is None else np.asarray(it.gradient, dtype=float).tolist(),
-                    "extra_value": it.extra_value,
-                    "extra_std": it.extra_std,
-                }
-                for it in record.iterations
-            ],
-        }
-
     def _serialize_optimizer_result(result) -> dict:
         payload = {}
 
@@ -301,10 +273,13 @@ def save_experiment_history(
         for record in experiment.outer_step_history
     ]
 
-    training_run_history_payload = [
-        _serialize_training_run_record(record)
-        for record in experiment.training_run_history
-    ]
+    recorder_payload = experiment.recorder.to_dict()
+    training_run_history_payload = recorder_payload["runs"]
+    recorder_metadata = {
+        key: value
+        for key, value in recorder_payload.items()
+        if key != "runs"
+    }
 
     gradient_history_payload = (
         None
@@ -324,6 +299,7 @@ def save_experiment_history(
     manifest = {
         "schema_version": 1,
         "saved_at": timestamp,
+        "inner_loop_recorder": recorder_metadata,
         "num_outer_steps": len(experiment.outer_step_history),
         "num_parameter_memory_records": len(experiment.parameter_memory_history),
         "num_accepted_ansatz_records": len(experiment.accepted_ansatz_history),
