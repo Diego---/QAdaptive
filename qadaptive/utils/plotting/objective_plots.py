@@ -15,6 +15,7 @@ def plot_cost_with_outer_boundaries(
     title: str | None = "Objective trace with outer-step boundaries",
     title_pad: int = 16,
     title_loc: str = "center",
+    extra_str: str = "Extra objective",
 ) -> tuple[plt.Figure, plt.Axes]:
     """
     Plot the objective trajectory across global plotting indices.
@@ -32,6 +33,17 @@ def plot_cost_with_outer_boundaries(
         Rotation angle in degrees for action labels. Default is ``10``.
     show_extra : bool, optional
         Whether to overlay periodic extra-objective evaluations. Default is True.
+    title : str | None, optional
+        Title string for the plot. If None, no title is displayed. Default is
+        ``"Objective trace with outer-step boundaries"``.
+    title_pad : int, optional
+        Padding in points between the title and the top of the axes. Default is ``16``.
+    title_loc : str, optional
+        Alignment/location of the title (e.g., 'center', 'left', 'right').
+        Default is ``"center"``.
+    extra_str : str, optional
+        Label text used in the legend for the extra-objective evaluations.
+        Default is ``"Extra objective"``.
 
     Returns
     -------
@@ -73,7 +85,7 @@ def plot_cost_with_outer_boundaries(
                 yerr=yerr,
                 fmt="o",
                 capsize=3,
-                label="Extra objective",
+                label=extra_str,
             )
             ax.legend(loc="best")
     ax.set_xlabel("Global inner-loop iteration")
