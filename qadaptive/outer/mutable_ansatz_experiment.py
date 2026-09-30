@@ -2141,6 +2141,38 @@ class MutableAnsatzExperiment:
         from qadaptive.utils.plotting.outer_plots import plot_outer_history
 
         return plot_outer_history(self.outer_step_history, **kwargs)
+    
+    def plot_architecture_evolution(self, *, indices=None, figsize=None):
+        """
+        Draw selected accepted architecture snapshots.
+
+        Delegates plotting to
+        :func:`~qadaptive.utils.plotting.architecture_plots.plot_architecture_evolution`
+        using ``self.accepted_ansatz_history``.
+
+        Parameters
+        ----------
+        indices : Sequence[int] | None, optional
+            Positions in ``accepted_ansatz_history`` to plot (not outer-loop iteration
+            numbers). If None, plots all accepted architecture snapshots. Default is None.
+        figsize : tuple[float, float] | None, optional
+            Overall figure size as ``(width, height)``. If None, height is computed
+            dynamically based on qubit counts across selected circuits. Default is None.
+
+        Returns
+        -------
+        tuple[matplotlib.figure.Figure, numpy.ndarray]
+            Created figure and 1D array of sub-axes, one per snapshot.
+        """
+        from qadaptive.utils.plotting.architecture_plots import (
+            plot_architecture_evolution,
+        )
+
+        return plot_architecture_evolution(
+            self.accepted_ansatz_history,
+            indices=indices,
+            figsize=figsize,
+        )
 
     @property
     def optimizer(self):

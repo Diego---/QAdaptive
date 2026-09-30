@@ -12,6 +12,7 @@ authors = [
 dependencies = [
     "numpy",
     "matplotlib",
+    "pylatexenc",
     "IPython",
     "qiskit >= 1.1, <2",
     "qiskit_experiments >= 0.6.1",
