@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
-import re
+import json, os, re, tempfile
+
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,6 +14,39 @@ from qiskit.circuit import QuantumCircuit
 if TYPE_CHECKING:
     from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
 
+
+@contextmanager
+def _atomic_output(path: Path, *, binary: bool = False):
+    path = Path(path)
+    temporary_file = tempfile.NamedTemporaryFile(
+        mode="wb" if binary else "w",
+        encoding=None if binary else "utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary_path = Path(temporary_file.name)
+
+    try:
+        with temporary_file as file:
+            yield file
+            file.flush()
+            os.fsync(file.fileno())
+
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _write_json(path: Path, payload: dict | list) -> None:
+    with _atomic_output(path) as file:
+        json.dump(payload, file, indent=2)
+
+
+def _save_circuit(path: Path, circuit: QuantumCircuit) -> None:
+    with _atomic_output(path, binary=True) as file:
+        qpy.dump(circuit, file)
 
 def save_experiment_history(
     experiment: MutableAnsatzExperiment,
@@ -95,14 +129,6 @@ def save_experiment_history(
 
         # Last resort
         return str(obj)
-
-    def _write_json(path: Path, payload: dict | list) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-
-    def _save_circuit(path: Path, circuit: QuantumCircuit) -> None:
-        with open(path, "wb") as f:
-            qpy.dump(circuit, f)
 
     def _circuit_summary(circuit: QuantumCircuit) -> dict:
         try:

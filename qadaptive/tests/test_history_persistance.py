@@ -1,4 +1,4 @@
-import json
+import json, pytest
 
 import numpy as np
 from qiskit import QuantumCircuit, qpy
@@ -9,6 +9,7 @@ from qadaptive.core.adaptive_ansatz import AdaptiveAnsatz
 from qadaptive.outer.action_definitions import INSERT_GATE
 from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
 from qadaptive.outer.outer_loop import ActionSpec, OuterStepPlan
+from qadaptive.persistence import history as persistence_history
 from qadaptive.training.optimizers import SPSA
 from qadaptive.training.recorder import InnerLoopRecorder
 from qadaptive.training.trainer import InnerLoopTrainer
@@ -365,3 +366,44 @@ def test_save_history_preserves_rejected_trial_and_accepted_state(
         True, True, False
     ]
     
+def test_failed_json_write_preserves_existing_file(tmp_path):
+    path = tmp_path / "history.json"
+    path.write_text('{"original": true}\n', encoding="utf-8")
+    original_bytes = path.read_bytes()
+
+    # Serialization fails after some replacement content has been written.
+    with pytest.raises(TypeError):
+        persistence_history._write_json(
+            path,
+            {"first": True, "unserializable": object()},
+        )
+
+    assert path.read_bytes() == original_bytes
+    assert set(tmp_path.iterdir()) == {path}
+
+
+def test_failed_qpy_write_preserves_existing_file(tmp_path, monkeypatch):
+    path = tmp_path / "circuit.qpy"
+
+    original_circuit = QuantumCircuit(1)
+    original_circuit.x(0)
+    with path.open("wb") as file:
+        qpy.dump(original_circuit, file)
+
+    original_bytes = path.read_bytes()
+
+    def failing_dump(circuit, file):
+        file.write(b"partial replacement")
+        raise OSError("simulated QPY write failure")
+
+    monkeypatch.setattr(persistence_history.qpy, "dump", failing_dump)
+
+    replacement = QuantumCircuit(1)
+    replacement.h(0)
+
+    with pytest.raises(OSError, match="simulated QPY write failure"):
+        persistence_history._save_circuit(path, replacement)
+
+    assert path.read_bytes() == original_bytes
+    assert _load_circuit(path) == original_circuit
+    assert set(tmp_path.iterdir()) == {path}
