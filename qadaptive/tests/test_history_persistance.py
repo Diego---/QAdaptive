@@ -212,3 +212,148 @@ def test_save_history_preserves_accepted_run_data(tmp_path, monkeypatch):
         == trial["ansatz_after"]
     )
     assert saved_trial["parameter_values"] == trial["parameter_values"]
+
+def test_save_history_preserves_rejected_trial_and_accepted_state(
+    tmp_path, monkeypatch
+):
+    """Retain a rejected proposal without replacing the accepted state."""
+    monkeypatch.setattr(algorithm_globals, "random_seed", 1234)
+
+    circuit = QuantumCircuit(2)
+    circuit.rx(Parameter("θ_0"), 0)
+    circuit.cx(0, 1)
+
+    recorder = InnerLoopRecorder(
+        record_initial_value=True,
+        record_gradients=True,
+    )
+    trainer = InnerLoopTrainer(
+        optimizer=SPSA(learning_rate=0.1, perturbation=0.1),
+        recorder=recorder,
+    )
+    experiment = MutableAnsatzExperiment(AdaptiveAnsatz(circuit), trainer)
+
+    experiment.run_outer_loop(
+        loss_function=_quadratic_loss,
+        plan_schedule=[_append_rx_plan],
+        outer_iterations=1,
+        train_iterations=2,
+        initial_point=[0.5],
+        reuse_parameter_memory=True,
+    )
+
+    accepted_circuit = experiment.ansatz.copy()
+    accepted_params = experiment.last_params.copy()
+    accepted_cost = experiment.last_cost
+    accepted_values = experiment.get_current_parameter_dict().copy()
+
+    assert accepted_circuit.num_parameters == 2
+    assert len(experiment.accepted_ansatz_history) == 2
+
+    plan = OuterStepPlan(
+        name="append_rx_rejected",
+        actions=_append_rx_plan(experiment).actions,
+        acceptance_mode="outer",
+    )
+
+    # The loss is nonnegative. Adding one parameter with this penalty
+    # guarantees rejection, even if retraining reduces the raw loss to zero.
+    penalty_scale = accepted_cost + 1.0
+    result = experiment.run_outer_step(
+        loss_function=_quadratic_loss,
+        plan=plan,
+        train_iterations=1,
+        reuse_parameter_memory=True,
+        complexity_penalty=lambda circuit: (
+            penalty_scale * circuit.num_parameters
+        ),
+        metropolis_temperature=None,
+    )
+
+    assert result.accepted is False
+    assert experiment.ansatz == accepted_circuit
+    np.testing.assert_array_equal(experiment.last_params, accepted_params)
+    assert experiment.last_cost == accepted_cost
+
+    output = experiment.save_history(tmp_path / "run")
+    manifest = _read_json(output / "manifest.json")
+    payloads = {
+        name: _read_json(output / manifest["files"][name])
+        for name in (
+            "current_state",
+            "outer_step_history",
+            "accepted_ansatz_history",
+            "trial_ansatz_history",
+            "training_run_history",
+        )
+    }
+
+    # The final archive still represents the accepted circuit and parameters.
+    state = payloads["current_state"]
+    saved_circuit = _load_circuit(
+        output / manifest["files"]["current_ansatz_qpy"]
+    )
+
+    assert saved_circuit == accepted_circuit
+    np.testing.assert_array_equal(state["last_params"], accepted_params)
+    assert state["last_cost"] == accepted_cost
+    assert state["current_parameter_dict"] == accepted_values
+
+    accepted_history = payloads["accepted_ansatz_history"]
+    assert len(accepted_history) == 2
+    assert (
+        _load_circuit(output / accepted_history[-1]["qpy_file"])
+        == accepted_circuit
+    )
+    assert accepted_history[-1]["parameter_values"] == accepted_values
+
+    # The rejected proposal remains available as a separate circuit snapshot.
+    trials = payloads["trial_ansatz_history"]
+    assert len(trials) == 2
+
+    trial = trials[-1]
+    assert trial["accepted"] is False
+    assert (
+        _load_circuit(output / trial["before_qpy_file"])
+        == accepted_circuit
+    )
+
+    rejected_circuit = _load_circuit(output / trial["after_qpy_file"])
+    assert rejected_circuit.num_parameters == 3
+    assert (
+        rejected_circuit
+        == experiment.trial_ansatz_history[-1]["ansatz_after"]
+    )
+
+    # Its inner-loop data survives, with the outer rejection attached.
+    runs = payloads["training_run_history"]
+    assert [run["accepted_outer_step"] for run in runs] == [
+        True, True, False
+    ]
+
+    rejected_run = runs[-1]
+    assert len(rejected_run["param_names"]) == 3
+    assert len(rejected_run["iterations"]) == 1
+    assert rejected_run["final_value"] == result.cost_after
+
+    np.testing.assert_array_equal(
+        rejected_run["final_params"],
+        recorder.last_run.final_params,
+    )
+    assert trial["parameter_values"] == dict(
+        zip(rejected_run["param_names"], rejected_run["final_params"])
+    )
+
+    saved_step = rejected_run["iterations"][0]
+    live_step = recorder.last_run.iterations[0]
+
+    assert live_step.gradient is not None
+    assert saved_step["value"] == live_step.value
+    assert saved_step["nfev"] == live_step.nfev
+    np.testing.assert_array_equal(saved_step["params"], live_step.params)
+    np.testing.assert_array_equal(saved_step["gradient"], live_step.gradient)
+
+    assert [step["accepted"] for step in payloads["outer_step_history"]] == [
+        True, True, False
+    ]
+    
