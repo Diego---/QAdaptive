@@ -67,6 +67,34 @@ class LoadedExperimentHistory:
         from qadaptive.reporting.summary import print_experiment_summary
 
         print_experiment_summary(self)
+        
+    def plot_outer_history(self, **kwargs):
+        """
+        Plot retained costs and rejected trial costs across outer iterations.
+
+        Parameters
+        ----------
+        **kwargs
+            Keyword arguments passed directly to
+            :func:`~qadaptive.utils.plotting.outer_plots.plot_outer_history`.
+
+            figsize : tuple[float, float], optional
+                Figure size. Default is ``(10, 4)``.
+            ylabel : str, optional
+                Label for the y-axis. Default is ``"Cost"``.
+            show_rejected : bool, optional
+                Whether to display rejected trial proposals as points. Default is True.
+            title : str | None, optional
+                Plot title. If None, no title is set. Default is ``"Outer-loop history"``.
+
+        Returns
+        -------
+        tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]
+            Created figure and axes objects.
+        """
+        from qadaptive.utils.plotting.outer_plots import plot_outer_history
+
+        return plot_outer_history(self.outer_step_history, **kwargs)
 
 
 def load_experiment_history(

@@ -435,6 +435,21 @@ def test_save_history_preserves_rejected_trial_and_accepted_state(
     assert summary["num_two_qubit_instructions"] == 1
     assert summary["optimizer_nfev"] == 10
     
+    import matplotlib.pyplot as plt
+
+    def retained_costs(history):
+        fig, ax = history.plot_outer_history()
+        try:
+            return np.asarray(ax.lines[0].get_ydata()).copy()
+        finally:
+            plt.close(fig)
+
+    live_costs = retained_costs(experiment)
+    saved_costs = retained_costs(loaded)
+
+    np.testing.assert_allclose(live_costs, saved_costs)
+    assert live_costs[-1] == accepted_cost
+    
 def test_failed_json_write_preserves_existing_file(tmp_path):
     path = tmp_path / "history.json"
     path.write_text('{"original": true}\n', encoding="utf-8")
