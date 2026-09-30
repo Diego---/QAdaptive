@@ -2100,6 +2100,11 @@ class MutableAnsatzExperiment:
 
         Rejected outer-loop proposals are saved only as metadata if they were not
         recorded as explicit ansatz objects elsewhere.
+        
+        Raises
+        ------
+        FileExistsError
+            When attempting to overwrite an existing manifest.json file.
         """
         return save_experiment_history(self, directory)
 

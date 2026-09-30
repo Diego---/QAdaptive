@@ -81,8 +81,21 @@ def save_experiment_history(
 
     Rejected outer-loop proposals are saved only as metadata if they were not
     recorded as explicit ansatz objects elsewhere.
+    
+    Raises
+    ------
+    FileExistsError
+        When attempting to overwrite an existing manifest.json file.
     """
     save_dir = Path(directory)
+    manifest_path = save_dir / "manifest.json"
+
+    if manifest_path.exists():
+        raise FileExistsError(
+            f"An archive already exists at {save_dir}. "
+            "Choose a new output directory."
+        )
+
     save_dir.mkdir(parents=True, exist_ok=True)
 
     circuits_dir = save_dir / "circuits"
@@ -345,7 +358,6 @@ def save_experiment_history(
         },
     }
 
-    _write_json(save_dir / "manifest.json", manifest)
     _write_json(save_dir / "current_state.json", current_state)
     _write_json(save_dir / "outer_step_history.json", outer_step_history_payload)
     _write_json(save_dir / "parameter_memory_history.json", parameter_memory_history_payload)
@@ -354,6 +366,7 @@ def save_experiment_history(
     _write_json(save_dir / "training_run_history.json", training_run_history_payload)
     _write_json(save_dir / "gradient_history.json", gradient_history_payload)
     _write_json(save_dir / "result_history.json", result_history_payload)
+    _write_json(manifest_path, manifest)
 
     return save_dir
     

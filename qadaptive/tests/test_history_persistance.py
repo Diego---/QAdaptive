@@ -407,3 +407,59 @@ def test_failed_qpy_write_preserves_existing_file(tmp_path, monkeypatch):
     assert path.read_bytes() == original_bytes
     assert _load_circuit(path) == original_circuit
     assert set(tmp_path.iterdir()) == {path}
+
+def _make_untrained_experiment():
+    circuit = QuantumCircuit(1)
+    circuit.rx(Parameter("θ_0"), 0)
+
+    trainer = InnerLoopTrainer(
+        optimizer=SPSA(learning_rate=0.1, perturbation=0.1),
+        recorder=InnerLoopRecorder(),
+    )
+    return MutableAnsatzExperiment(AdaptiveAnsatz(circuit), trainer)
+
+
+def test_save_history_refuses_to_overwrite_completed_archive(tmp_path):
+    experiment = _make_untrained_experiment()
+    output = experiment.save_history(tmp_path / "run")
+
+    def saved_files():
+        return {
+            path.relative_to(output): path.read_bytes()
+            for path in output.rglob("*")
+            if path.is_file()
+        }
+
+    original_files = saved_files()
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        experiment.save_history(output)
+
+    assert saved_files() == original_files
+
+
+def test_failed_archive_save_does_not_publish_manifest(
+    tmp_path, monkeypatch
+):
+    experiment = _make_untrained_experiment()
+    output = tmp_path / "run"
+    original_write = persistence_history._write_json
+
+    def failing_write(path, payload):
+        # Fail near the end, after earlier files have been saved.
+        if path.name == "result_history.json":
+            raise OSError("simulated archive write failure")
+        original_write(path, payload)
+
+    monkeypatch.setattr(
+        persistence_history, "_write_json", failing_write
+    )
+
+    with pytest.raises(
+        OSError, match="simulated archive write failure"
+    ):
+        experiment.save_history(output)
+
+    assert (output / "circuits" / "current_ansatz.qpy").is_file()
+    assert (output / "training_run_history.json").is_file()
+    assert not (output / "manifest.json").exists()
