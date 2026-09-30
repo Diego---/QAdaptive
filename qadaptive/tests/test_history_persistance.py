@@ -10,6 +10,7 @@ from qadaptive.outer.action_definitions import INSERT_GATE
 from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
 from qadaptive.outer.outer_loop import ActionSpec, OuterStepPlan
 from qadaptive.persistence import history as persistence_history
+from qadaptive.persistence.loading import load_experiment_history
 from qadaptive.training.optimizers import SPSA
 from qadaptive.training.recorder import InnerLoopRecorder
 from qadaptive.training.trainer import InnerLoopTrainer
@@ -221,6 +222,16 @@ def test_save_history_preserves_accepted_run_data(tmp_path, monkeypatch):
         == trial["ansatz_after"]
     )
     assert saved_trial["parameter_values"] == trial["parameter_values"]
+    
+    loaded = load_experiment_history(output)
+
+    assert loaded.manifest == manifest
+    assert loaded.ansatz == experiment.ansatz
+    assert loaded.last_cost == experiment.last_cost
+    np.testing.assert_array_equal(loaded.last_params, experiment.last_params)
+
+    for name, payload in payloads.items():
+        assert getattr(loaded, name) == payload
 
 def test_save_history_preserves_rejected_trial_and_accepted_state(
     tmp_path, monkeypatch
@@ -366,6 +377,13 @@ def test_save_history_preserves_rejected_trial_and_accepted_state(
         True, True, False
     ]
     
+    loaded = load_experiment_history(output)
+
+    assert loaded.ansatz == accepted_circuit
+    assert loaded.last_cost == accepted_cost
+    np.testing.assert_array_equal(loaded.last_params, accepted_params)
+    assert loaded.trial_ansatz_history[-1]["accepted"] is False
+    
 def test_failed_json_write_preserves_existing_file(tmp_path):
     path = tmp_path / "history.json"
     path.write_text('{"original": true}\n', encoding="utf-8")
@@ -463,3 +481,17 @@ def test_failed_archive_save_does_not_publish_manifest(
     assert (output / "circuits" / "current_ansatz.qpy").is_file()
     assert (output / "training_run_history.json").is_file()
     assert not (output / "manifest.json").exists()
+    
+    with pytest.raises(FileNotFoundError, match="manifest.json"):
+        load_experiment_history(output)
+
+def test_load_history_rejects_unknown_schema(tmp_path):
+    output = _make_untrained_experiment().save_history(tmp_path / "run")
+    path = output / "manifest.json"
+
+    manifest = _read_json(path)
+    manifest["schema_version"] = 999
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported archive schema version"):
+        load_experiment_history(output)
