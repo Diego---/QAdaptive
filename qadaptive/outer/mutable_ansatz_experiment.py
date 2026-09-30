@@ -2173,6 +2173,41 @@ class MutableAnsatzExperiment:
             indices=indices,
             figsize=figsize,
         )
+        
+    def plot_complexity_evolution(self, **kwargs):
+        """
+        Plot retained parameter and two-qubit-instruction counts.
+
+        Delegates plotting to
+        :func:`~qadaptive.utils.plotting.outer_plots.plot_complexity_evolution`
+        using ``self.outer_step_history``.
+
+        Parameters
+        ----------
+        **kwargs
+            Keyword arguments passed directly to
+            :func:`~qadaptive.utils.plotting.outer_plots.plot_complexity_evolution`.
+
+            figsize : tuple[float, float], optional
+                Figure size as ``(width, height)``. Default is ``(10, 6)``.
+            show_rejected : bool, optional
+                Whether to display trial complexity values of rejected proposals
+                as red 'x' markers. Default is True.
+            title : str | None, optional
+                Overall title for the figure. If None, no title is displayed.
+                Default is ``"Circuit complexity evolution"``.
+
+        Returns
+        -------
+        tuple[matplotlib.figure.Figure, numpy.ndarray]
+            Created figure and a 1D NumPy array containing the two subplot axes
+            (top for parameters, bottom for two-qubit instructions).
+        """
+        from qadaptive.utils.plotting.outer_plots import (
+            plot_complexity_evolution,
+        )
+
+        return plot_complexity_evolution(self.outer_step_history, **kwargs)
 
     @property
     def optimizer(self):
