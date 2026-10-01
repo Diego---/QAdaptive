@@ -273,7 +273,7 @@ experiment.recorder.plot_objective(extra_str="Alternative Objective")
 | `accepted_ansatz_history` | Accepted trained circuit snapshots and their parameter values. |
 | `parameter_memory_history` | Recorded parameter-memory states across the workflow. |
 | `training_run_history` | The recorder's inner training runs. |
-| `result_history` | Completed optimiser-result records, when result tracking is enabled. |
+| `result_history` | Completed optimizer-result records, when result tracking is enabled. |
 | `last_cost`, `last_params`, `ansatz` | The current accepted cost, parameter vector, and circuit. |
 
 The final accepted state can differ from the lowest-cost accepted state when the chosen acceptance settings allow cost increases. To select the lowest-cost accepted snapshot:
@@ -343,12 +343,12 @@ The archive includes:
 | `accepted_ansatz_history.json`, `trial_ansatz_history.json` | Snapshot metadata, parameter values, and circuit-file references. |
 | `parameter_memory_history.json` | Parameter-memory records. |
 | `training_run_history.json` | Recorded inner training runs and observations. |
-| `gradient_history.json`, `result_history.json` | Gradient data and optimiser-result summaries, subject to tracking settings. |
+| `gradient_history.json`, `result_history.json` | Gradient data and optimizer-result summaries, subject to tracking settings. |
 | `circuits/` | QPY files for the current circuit and accepted and trial snapshots. |
 
 The archive preserves what the experiment records. Store the problem definition, full strategy settings, seeds, and dependency versions alongside it. The example adds a `run_config.json` sidecar with some of that context; extend it with the settings relevant to your experiment.
 
-Standalone optimisation runs performed outside the experiment need their own export.
+Standalone optimization runs performed outside the experiment need their own export.
 
 ## Loading saved data for analysis
 
@@ -374,7 +374,7 @@ trial_before = loaded.load_trial_ansatz(index=-1, stage="before")
 trial_after = loaded.load_trial_ansatz(index=-1, stage="after")
 ```
 
-The loader returns a `LoadedExperimentHistory` analysis object. It supports summaries, outer-history plots, complexity plots, and accepted-architecture plots. Saved inner runs are available through `loaded.training_run_history`; the loader currently exposes those records as dictionaries and does not reconstruct an `InnerLoopRecorder` or a live optimiser.
+The loader returns a `LoadedExperimentHistory` analysis object. It supports summaries, outer-history plots, complexity plots, and accepted-architecture plots. Saved inner runs are available through `loaded.training_run_history`; the loader currently exposes those records as dictionaries and does not reconstruct an `InnerLoopRecorder` or a live optimizer.
 
 Live history entries can be dataclasses; loaded history entries are dictionaries. For example, select the lowest-cost archived accepted snapshot with:
 
