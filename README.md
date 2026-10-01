@@ -51,22 +51,13 @@ Orchestrates the full adaptive workflow. It combines an `AdaptiveAnsatz` and an 
 
 ## Installation
 
-QAdaptive targets Python 3.10+ and currently declares compatibility with `qiskit >= 1.1, < 2`.
+QAdaptive targets Python 3.10+ and is currently compatible with `qiskit >= 1.1, < 2`.
 
 Install in editable mode during development:
 
 ```bash
 pip install -e .
 ```
-
-From the current package metadata, the main runtime dependencies are:
-
-- `numpy`
-- `matplotlib`
-- `IPython`
-- `qiskit >= 1.1, < 2`
-- `qiskit_experiments >= 0.6.1`
-- `qiskit_algorithms >= 0.3.0`
 
 ## Quickstart: adaptive VQE from a separable ansatz
 
@@ -230,7 +221,7 @@ final_params = experiment.get_current_parameter_dict()
 
 ## What this workflow is doing
 
-The example above follows the same pattern used in the package notebook examples:
+The example follows a proposed pattern that can be used:
 
 1. **Define a problem-specific objective** as a Python callable.
 2. **Start from a generic parameterized circuit**.
@@ -275,36 +266,6 @@ recorder.plot_parameters()
 recorder.plot_parameter_heatmap(normalize=True)
 ```
 
-## Package layout
-
-A high-level overview of the current repository layout:
-
-```text
-qadaptive/
-├── core/
-│   ├── adaptive_ansatz.py
-│   ├── mutation.py
-│   ├── operator_pool.py
-│   ├── pruning.py
-│   └── simplification.py
-├── outer/
-│   ├── action_definitions.py
-│   ├── mutable_ansatz_experiment.py
-│   ├── outer_loop.py
-│   ├── plan_builders.py
-│   └── plan_helpers.py
-├── training/
-│   ├── history.py
-│   ├── recorder.py
-│   ├── trainer.py
-│   ├── termination_and_callback.py
-│   └── optimizers/
-|   
-└── utils/
-    ├── plotting/
-    └── simplification_utils.py
-```
-
 ## Design philosophy
 
 QAdaptive is intended for research code where **structure search is part of the experiment**. The package favors:
@@ -317,7 +278,7 @@ QAdaptive is intended for research code where **structure search is part of the 
 
 ## Current scope
 
-QAdaptive is currently best understood as an **experimental research framework** for adaptive variational circuits in Qiskit. The public API is already useful, but it is still evolving. Users should expect some interfaces and helper names to change as the package matures.
+QAdaptive is currently best understood as an **experimental research framework** for adaptive variational circuits in Qiskit.
 
 ## Testing
 
@@ -341,11 +302,11 @@ This package is an independent implementation and extension of related adaptive-
 
 ## Version
 
-The package metadata currently identifies QAdaptive as version `0.2` / `0.2.0`.
+The package is currently at version `0.2` / `0.2.0`.
 
 ## Citation
 
-Coming soon
+Coming soon.
 
 ## License
 
