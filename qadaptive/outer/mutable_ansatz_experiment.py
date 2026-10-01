@@ -1179,7 +1179,7 @@ class MutableAnsatzExperiment:
     def run_outer_loop(
         self,
         loss_function: Callable[[np.ndarray], float],
-        plan_schedule: list[Callable[["MutableAnsatzExperiment"], OuterStepPlan]],
+        plan_schedule: list[OuterPlanBuilder],
         outer_iterations: int | None = None,
         outer_termination_checker: OuterTerminationChecker | None = None,
         train_iterations: int | list[int] = 100,
@@ -1207,7 +1207,7 @@ class MutableAnsatzExperiment:
         ----------
         loss_function : Callable[[np.ndarray], float]
             Objective function used for training and acceptance decisions.
-        plan_schedule : list[Callable[[MutableAnsatzExperiment], OuterStepPlan]]
+        plan_schedule : list[OuterPlanBuilder]
             Ordered list of configured plan builders. At outer iteration `n`, the
             selected builder is called with the current experiment state to construct
             the next `OuterStepPlan`. A builder may return `None` to request normal
