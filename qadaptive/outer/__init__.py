@@ -1,4 +1,9 @@
-from .outer_loop import ActionSpec, OuterStepPlan
+from .outer_loop import (
+    ActionSpec,
+    OuterStepPlan,
+    OuterPlanBuilder,
+    OuterTerminationChecker,
+)
 from .mutable_ansatz_experiment import MutableAnsatzExperiment
 
 from .plan_builders import (
@@ -39,6 +44,8 @@ __all__ = [
     "MutableAnsatzExperiment",
     "ActionSpec",
     "OuterStepPlan",
+    "OuterPlanBuilder",
+    "OuterTerminationChecker",
 
     # Index policies
     "default_append_index_policy",

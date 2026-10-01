@@ -41,7 +41,9 @@ from qadaptive.outer.outer_loop import (
     AcceptedAnsatzRecord,
     ExperimentSnapshot,
     ActionSpec,
-    OuterStepPlan
+    OuterStepPlan,
+    OuterPlanBuilder,
+    OuterTerminationChecker
 )
 
 logger = logging.getLogger(__name__)
@@ -1179,6 +1181,7 @@ class MutableAnsatzExperiment:
         loss_function: Callable[[np.ndarray], float],
         plan_schedule: list[Callable[["MutableAnsatzExperiment"], OuterStepPlan]],
         outer_iterations: int | None = None,
+        outer_termination_checker: OuterTerminationChecker | None = None,
         train_iterations: int | list[int] = 100,
         train_before_first_plan: bool = True,
         initial_point: list | np.ndarray | None = None,
@@ -1206,12 +1209,19 @@ class MutableAnsatzExperiment:
             Objective function used for training and acceptance decisions.
         plan_schedule : list[Callable[[MutableAnsatzExperiment], OuterStepPlan]]
             Ordered list of configured plan builders. At outer iteration `n`, the
-            `n`th builder is called with the current experiment state to construct
-            the next `OuterStepPlan`. If `outer_iterations` exceeds the schedule
-            length, the last builder is reused for all remaining steps.
+            selected builder is called with the current experiment state to construct
+            the next `OuterStepPlan`. A builder may return `None` to request normal
+            termination of the outer loop without executing another structural step.
+            If `outer_iterations` exceeds the schedule length, the last builder is
+            reused for all remaining steps.
         outer_iterations : int | None, optional
             Number of outer-loop steps to execute. If None, the schedule length is
             used.
+        outer_termination_checker : OuterTerminationChecker | None, optional
+            Optional callable evaluated on the current retained experiment state before
+            constructing each new outer-step plan. It receives the experiment and should
+            return True to terminate the outer loop normally, or False to continue.
+            Default is None.
         train_iterations : int | list[int], optional
             Number of inner-loop optimization steps after each executed plan.
             Can be constant for all outer-loop iterations or specified as a list 
@@ -1369,6 +1379,18 @@ class MutableAnsatzExperiment:
             self._outer_iteration += 1 
 
         for step in range(outer_iterations):
+
+            if (
+                outer_termination_checker is not None
+                and outer_termination_checker(self)
+            ):
+                logger.info(
+                    "Outer-loop termination checker requested termination "
+                    "at outer iteration %d.",
+                    self._outer_iteration,
+                )
+                break
+
             builder_index = min(step, len(plan_schedule) - 1)
             builder = plan_schedule[builder_index]
 
@@ -1388,6 +1410,14 @@ class MutableAnsatzExperiment:
                 )
                 if stop_on_error:
                     raise
+                break
+
+            if plan is None:
+                logger.info(
+                    "Plan builder %d requested termination at outer iteration %d.",
+                    builder_index,
+                    self._outer_iteration,
+                )
                 break
 
             logger.info(
@@ -2218,6 +2248,11 @@ class MutableAnsatzExperiment:
     def recorder(self):
         """Return the persistent inner-loop recorder."""
         return self.trainer.recorder
+    
+    @property
+    def outer_iteration(self) -> int:
+        """Return the current outer-loop iteration index."""
+        return self._outer_iteration
 
     @property
     def gradient_history(self):
