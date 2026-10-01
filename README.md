@@ -1,84 +1,77 @@
 # QAdaptive
 
-Adaptive variational quantum circuits in Qiskit.
+A research toolkit for adaptive variational quantum circuits in Qiskit.
 
-QAdaptive is a research-oriented Python package for workflows in which the **circuit structure itself changes during optimization**. Instead of fixing an ansatz once and only training its parameters, QAdaptive lets you alternate between:
+QAdaptive is a research-oriented Python package for workflows in which the **circuit structure itself changes during optimization**. One can configure operator pools, gate and block insertion rules, insertion positions, pruning strategies, and acceptance criteria, then combine them into an adaptive experiment.
 
-- an **inner loop** that optimizes the current parameters, and
-- an **outer loop** that modifies the circuit by inserting gates or blocks, simplifying the circuit, and pruning structure.
+An inner loop trains the current circuit parameters, while an outer loop proposes structural changes and decides which proposals to retain. Parameter memory supports continued training across those changes.
 
-At the package root, QAdaptive currently exports three main entry points:
+The package records training trajectories, structural decisions, and accepted and trial circuit snapshots. Summaries, plots, and structured archives help you inspect experiments and preserve their results for later analysis.
 
-- `AdaptiveAnsatz`
-- `MutableAnsatzExperiment`
-- `InnerLoopTrainer`
+QAdaptive is an experimental research framework.
 
-## Why QAdaptive?
+## What can you configure?
 
-Many variational workflows start from a fixed ansatz and focus only on parameter optimization. QAdaptive is built for a different regime:
+| Part of the experiment | Examples |
+| --- | --- |
+| Objective | A Python callable defining the task, such as a VQE energy. |
+| Initial circuit | A parameterised Qiskit `QuantumCircuit`. |
+| Operator and block pools | Supported gate names and built-in or custom `PoolBlock` definitions. |
+| Growth | Star, uniform, nearest-neighbour, or custom structural proposals. |
+| Insertion positions | Append, random positions, positions between two-qubit instructions, or a custom policy. |
+| Pruning and simplification | Gate selectors, pruning sweeps, targeted pruning, and simplification passes. |
+| Inner optimization | Compatible stepwise optimizers, including QAdaptive's SPSA and ADAM. |
+| Acceptance | Objective tolerances, complexity penalties, Metropolis settings, and forced acceptance. |
+| Scheduling | The sequence of plans, training budgets, parameter reuse, and optimizer iteration resets. |
 
-- start from a very small or deliberately simple circuit,
-- grow the circuit when the current structure is insufficient,
-- simplify or prune when the circuit becomes unnecessarily large,
-- warm-start retraining after structural changes,
-- keep enough history to analyze how the ansatz evolved.
+The objective supplies the application-specific problem. QAdaptive coordinates circuit changes, parameter training, and experimental records.
 
-This makes the package useful for experiments in adaptive VQE, variational quantum control, quantum autoencoders, and related structure-learning problems.
 
-## Core ideas
+### Core objects
 
-QAdaptive revolves around three abstractions:
+| Object | Responsibility |
+| --- | --- |
+| `AdaptiveAnsatz` | Wraps a parameterised circuit and manages structural edits and parameter bookkeeping. |
+| `InnerLoopTrainer` | Trains the parameters of the current circuit using a compatible stepwise optimizer. |
+| `InnerLoopRecorder` | Records inner training runs, accepted optimizer updates, optional gradients, and additional diagnostics; provides inner-history plots. |
+| `MutableAnsatzExperiment` | Coordinates outer proposals, training, acceptance, rollback, parameter memory, and histories. |
 
-### `AdaptiveAnsatz`
-Wraps a parameterized `QuantumCircuit` so that it can be modified structurally while keeping parameter bookkeeping consistent.
+All four objects are available from the package root:
 
-### `InnerLoopTrainer`
-Runs parameter optimization for a fixed ansatz using a stepwise optimizer. The trainer can keep gradient history and, if requested, record a full per-iteration training trace.
-
-### `MutableAnsatzExperiment`
-Orchestrates the full adaptive workflow. It combines an `AdaptiveAnsatz` and an `InnerLoopTrainer`, applies outer-loop actions such as gate insertion, block insertion, simplification, and pruning, and keeps histories of accepted structures and optimization results.
-
-## Features
-
-- Convert a generic parameterized `QuantumCircuit` into an adaptive ansatz.
-- Alternate parameter training with structural updates.
-- Insert single-qubit gates, two-qubit gates, or predefined blocks.
-- Simplify circuits through transpiler-based passes.
-- Prune two-qubit structure while respecting locked gates.
-- Warm-start new training runs from the last accepted parameters.
-- Record optimization results, parameter memory, accepted ansatz history, and training traces.
-- Use plotting utilities to visualize objective trajectories and parameter evolution.
+```python
+from qadaptive import (
+    AdaptiveAnsatz,
+    InnerLoopRecorder,
+    InnerLoopTrainer,
+    MutableAnsatzExperiment,
+)
+```
 
 ## Installation
 
-QAdaptive targets Python 3.10+ and currently declares compatibility with `qiskit >= 1.1, < 2`.
+QAdaptive targets Python 3.10+ and is currently compatible with `qiskit >= 1.1, < 2`.
 
-Install in editable mode during development:
+For a local installation,
 
 ```bash
-pip install -e .
+git clone https://github.com/Diego---/QAdaptive.git
+cd QAdaptive
+python -m pip install .
 ```
-
-From the current package metadata, the main runtime dependencies are:
-
-- `numpy`
-- `matplotlib`
-- `IPython`
-- `qiskit >= 1.1, < 2`
-- `qiskit_experiments >= 0.6.1`
-- `qiskit_algorithms >= 0.3.0`
 
 ## Quickstart: adaptive VQE from a separable ansatz
 
-The example below illustrates the intended usage pattern on a small toy VQE problem. The starting circuit is deliberately simple: one `rx` rotation per qubit, with no entanglement. QAdaptive then grows and prunes the ansatz around that seed.
+This example uses a fixed two-qubit Hamiltonian and exact statevector energies. It starts from an off-zero point, proposes growth and pruning/simplification, and retrains after structural proposals. The short training budgets are intended for demonstrating the workflow.
 
 ```python
+import random
 from functools import partial
 
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector
 from qiskit.quantum_info import SparsePauliOp, Statevector
+from qiskit_algorithms.utils import algorithm_globals
 
 from qadaptive import (
     AdaptiveAnsatz,
@@ -87,15 +80,17 @@ from qadaptive import (
     MutableAnsatzExperiment,
 )
 from qadaptive.outer import (
-    build_single_qubit_block_plan,
+    build_prune_sweep_plan,
     build_star_growth_plan,
-    build_targeted_prune_plan,
-    combine_plan_builders,
     default_append_index_policy,
-    between_2qg_indices_policy,
-    make_select_random_gates,
 )
-from qadaptive.training import SPSA, TerminationChecker
+from qadaptive.training import SPSA
+
+SEED = 1234
+TRAIN_ITERATIONS = 40
+random.seed(SEED)
+np.random.seed(SEED)
+algorithm_globals.random_seed = SEED
 
 # --- Problem Hamiltonian ----------------------------------------------------
 # A small toy Hamiltonian for demonstration.
@@ -116,9 +111,14 @@ def vqe_cost(params, ansatz):
     value = psi.expectation_value(H)
     return float(np.real(value))
 
+def energy(params, ansatz):
+    bound = ansatz.assign_parameters(params, inplace=False)
+    state = Statevector.from_instruction(bound)
+    return float(state.expectation_value(H).real)
+
 
 # --- Initial separable ansatz ----------------------------------------------
-num_qubits = 3
+num_qubits = int(H.num_qubits)
 theta = ParameterVector("theta", num_qubits)
 
 initial_circuit = QuantumCircuit(num_qubits)
@@ -126,24 +126,22 @@ for q in range(num_qubits):
     initial_circuit.rx(theta[q], q)
 
 # Convert the generic circuit into an adaptive ansatz.
-adaptive_ansatz = AdaptiveAnsatz.from_generic_circuit(initial_circuit)
+adaptive_ansatz = AdaptiveAnsatz.from_generic_circuit(
+    initial_circuit,
+    operator_pool=["rx", "ry", "rz", "cx", "cz"],
+)
 
 
 # --- Inner-loop optimizer ---------------------------------------------------
-termination_checker = TerminationChecker(
-    mode="min",
-    target_value=None,
-    target_tol=1e-4,
-    plateau_window=15,
-    plateau_slope_tol=1e-4,
-    plateau_improvement_tol=1e-4,
-)
-
-optimizer = SPSA(
-    maxiter=100,
-    termination_checker=termination_checker,
-    resamplings=1,
-)
+spsa_settings = {
+    "a": 0.2,
+    "alpha": 0.602,
+    "c": 0.1,
+    "gamma": 0.101,
+    "stability_constant": 0.0,
+}
+optimizer = SPSA(resamplings=1)
+optimizer.set_power_series_hyperparameters(**spsa_settings)
 
 recorder = InnerLoopRecorder(
     record_initial_value=True,
@@ -166,7 +164,7 @@ experiment = MutableAnsatzExperiment(
 # --- Outer-loop schedule ----------------------------------------------------
 growth_builder = partial(
     build_star_growth_plan,
-    block_name="cz_identity_rotation_on_one_qubit",
+    block_name="cx_identity",
     center_qubit=0,
     max_insertions=1,
     repetitions=1,
@@ -202,14 +200,12 @@ schedule = [
 # --- Run the adaptive loop --------------------------------------------------
 results = experiment.run_outer_loop(
     loss_function=vqe_cost,
+    loss_next=energy,
     plan_schedule=schedule,
     outer_iterations=len(schedule),
-    train_iterations=50,
+    train_iterations=TRAIN_ITERATIONS,
     train_before_first_plan=True,
-    initial_point=None,
-    train_after_plan=True,
-    trainer_iteration_reset=0,
-    update_parameter_memory=True,
+    trainer_iteration_reset=None,
     reuse_parameter_memory=True,
     default_value_for_new_params=0.0,
     record_parameter_memory=True,
@@ -219,117 +215,224 @@ results = experiment.run_outer_loop(
 
 
 # --- Inspect what happened --------------------------------------------------
-print("Final energy:", experiment.last_cost)
-print("Number of accepted ansatz states:", len(experiment.accepted_ansatz_history))
-print("Number of optimizer results:", len(experiment.result_history))
-print("Number of training runs recorded:", len(recorder.runs))
+experiment.print_summary()
 
 final_circuit = experiment.ansatz
 final_params = experiment.get_current_parameter_dict()
 ```
 
-## What this workflow is doing
+`loss_next=energy` evaluates the updated parameter point for the recorded objective values. `trainer_iteration_reset=None` continues the SPSA iteration schedule across training phases. Parameter memory reuses values for parameters that remain active, newly introduced parameters start at zero.
 
-The example above follows the same pattern used in the package notebook examples:
-
-1. **Define a problem-specific objective** as a Python callable.
-2. **Start from a generic parameterized circuit**.
-3. **Convert it to an adaptive ansatz** with `AdaptiveAnsatz.from_generic_circuit(...)`.
-4. **Configure an inner-loop optimizer** through `InnerLoopTrainer`.
-5. **Define an outer-loop schedule** with plan builders.
-6. **Run the adaptive loop** with `MutableAnsatzExperiment.run_outer_loop(...)`.
-7. **Inspect the resulting histories**.
-
-This separation is deliberate: QAdaptive handles the adaptive circuit workflow, while the user remains in control of the problem definition.
+The `cx_identity` block becomes the identity at zero rotation angles. Zero initialisation preserves the current circuit's action for such blocks, this property depends on the selected block.
 
 ## Inspecting results
 
-The experiment object is designed to expose the state of the run after optimization. In particular, the notebook workflow uses:
-
-- `experiment.result_history` for the optimizer-level outcomes of each training phase,
-- `experiment.accepted_ansatz_history` for the accepted structural milestones,
-- `experiment.recorder` (the same object as `recorder`) for detailed inner-loop trajectories,
-- `experiment.last_cost` and `experiment.last_params` for the current accepted state.
-
-Typical inspection patterns look like this:
+The following examples continue from the quickstart.
 
 ```python
-print(experiment.last_cost)
-print(experiment.get_current_parameter_dict())
-print(len(experiment.accepted_ansatz_history))
+import matplotlib.pyplot as plt
 
+# Plot the objective reached during each inner-step optimization
+experiment.plot_outer_history(ylabel="Energy")
+# Print first and last ansätze used
+experiment.plot_architecture_evolution(indices=[0, -1])
+experiment.plot_complexity_evolution()
+
+experiment.recorder.plot_objective()
+experiment.recorder.plot_parameters()
+experiment.recorder.plot_parameter_heatmap(normalize=True)
+
+plt.show()
+```
+
+Plotting methods return the Matplotlib figure and axes for further customization or export:
+
+```python
+fig, ax = experiment.plot_outer_history(ylabel="Energy")
+fig.savefig("outer_history.pdf", bbox_inches="tight")
+```
+
+`plot_outer_history()` shows retained costs and separate markers for rejected trial costs. `plot_complexity_evolution()` applies the same distinction to parameter and two-qubit-instruction counts.
+
+`plot_architecture_evolution()` draws accepted circuit snapshots. Its `indices` select positions in `accepted_ansatz_history`, not outer iteration numbers; `[0, -1]` selects the first and last recorded accepted states.
+
+If the recorder was configured with `extra_objective` and `extra_evaluation_frequency` before training, label that diagnostic curve with:
+
+```python
+experiment.recorder.plot_objective(extra_str="Alternative Objective")
+```
+
+`extra_str` labels existing extra-objective observations in the legend. The recorder can also be used directly, for example `recorder.plot_parameters()`; it is the same object exposed as `experiment.recorder`.
+
+### Histories and final state
+
+| Attribute | Contents |
+| --- | --- |
+| `outer_step_history` | Outer results, including acceptance decisions, costs, and complexity before and after proposals. |
+| `trial_ansatz_history` | Proposed circuits before and after structural changes, including rejected proposals. |
+| `accepted_ansatz_history` | Accepted trained circuit snapshots and their parameter values. |
+| `parameter_memory_history` | Recorded parameter-memory states across the workflow. |
+| `training_run_history` | The recorder's inner training runs. |
+| `result_history` | Completed optimizer-result records, when result tracking is enabled. |
+| `last_cost`, `last_params`, `ansatz` | The current accepted cost, parameter vector, and circuit. |
+
+The final accepted state can differ from the lowest-cost accepted state when the chosen acceptance settings allow cost increases. To select the lowest-cost accepted snapshot:
+
+```python
 best_record = min(
-    (record for record in experiment.accepted_ansatz_history if record.cost is not None),
+    (
+        record
+        for record in experiment.accepted_ansatz_history
+        if record.cost is not None
+    ),
     key=lambda record: record.cost,
 )
 
 best_circuit = best_record.ansatz.copy()
 best_params = dict(best_record.parameter_values)
+best_cost = best_record.cost
 ```
 
-The recorder owns the complete optimization history and exposes plotting methods directly:
+## Saving an experiment
+
+`save_history()` creates a structured archive of the recorded experiment and its current accepted state. Use a distinct directory for each save:
 
 ```python
-recorder.plot_objective()
-recorder.plot_parameters()
-recorder.plot_parameter_heatmap(normalize=True)
+import json
+from datetime import datetime
+from importlib.metadata import version
+from pathlib import Path
+
+output_directory = (
+    Path("results")
+    / datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+)
+archive_directory = experiment.save_history(output_directory)
+
+# Keep problem and configuration metadata alongside the experiment archive.
+run_config = {
+    "seed": SEED,
+    "train_iterations": TRAIN_ITERATIONS,
+    "spsa": spsa_settings,
+    "operator_pool": list(experiment.adaptive_ansatz.operator_pool),
+    "pauli_labels": H.paulis.to_labels(),
+    "coefficients_real": H.coeffs.real.tolist(),
+    "coefficients_imag": H.coeffs.imag.tolist(),
+    "package_versions": {
+        name: version(name)
+        for name in ("qadaptive", "qiskit", "qiskit-algorithms", "numpy")
+    },
+}
+with (archive_directory / "run_config.json").open(
+    "w", encoding="utf-8"
+) as file:
+    json.dump(run_config, file, indent=2)
+
+print(f"Saved experiment to: {archive_directory.resolve()}")
 ```
 
-## Package layout
+Completed archives are protected against overwrite: saving to a directory containing an existing `manifest.json` raises `FileExistsError`.
 
-A high-level overview of the current repository layout:
+The archive includes:
 
-```text
-qadaptive/
-├── core/
-│   ├── adaptive_ansatz.py
-│   ├── mutation.py
-│   ├── operator_pool.py
-│   ├── pruning.py
-│   └── simplification.py
-├── outer/
-│   ├── action_definitions.py
-│   ├── mutable_ansatz_experiment.py
-│   ├── outer_loop.py
-│   ├── plan_builders.py
-│   └── plan_helpers.py
-├── training/
-│   ├── history.py
-│   ├── recorder.py
-│   ├── trainer.py
-│   ├── termination_and_callback.py
-│   └── optimizers/
-|   
-└── utils/
-    ├── plotting/
-    └── simplification_utils.py
+| Files | Contents |
+| --- | --- |
+| `manifest.json` | Archive schema version, save timestamp, recorder settings, record counts, and file references. |
+| `current_state.json` | Current accepted parameters and cost, parameter memory, and structural bookkeeping. |
+| `outer_step_history.json` | Recorded outer-loop results. |
+| `accepted_ansatz_history.json`, `trial_ansatz_history.json` | Snapshot metadata, parameter values, and circuit-file references. |
+| `parameter_memory_history.json` | Parameter-memory records. |
+| `training_run_history.json` | Recorded inner training runs and observations. |
+| `gradient_history.json`, `result_history.json` | Gradient data and optimizer-result summaries, subject to tracking settings. |
+| `circuits/` | QPY files for the current circuit and accepted and trial snapshots. |
+
+The archive preserves what the experiment records. Store the problem definition, full strategy settings, seeds, and dependency versions alongside it. The example adds a `run_config.json` sidecar with some of that context; extend it with the settings relevant to your experiment.
+
+Standalone optimization runs performed outside the experiment need their own export.
+
+## Loading saved data for analysis
+
+```python
+from qadaptive.persistence.loading import load_experiment_history
+
+# In a later session, replace archive_directory with the saved directory path.
+loaded = load_experiment_history(archive_directory)
+
+loaded.print_summary()
+loaded.plot_outer_history(ylabel="Energy")
+loaded.plot_architecture_evolution(indices=[0, -1])
+loaded.plot_complexity_evolution()
+
+final_circuit = loaded.ansatz
+final_params = loaded.last_params
+final_cost = loaded.last_cost
+bound_final_circuit = final_circuit.assign_parameters(final_params)
+
+# Retrieve archived accepted and trial circuits by history position.
+accepted_circuit = loaded.load_accepted_ansatz(index=-1)
+trial_before = loaded.load_trial_ansatz(index=-1, stage="before")
+trial_after = loaded.load_trial_ansatz(index=-1, stage="after")
 ```
 
-## Design philosophy
+The loader returns a `LoadedExperimentHistory` analysis object. It supports summaries, outer-history plots, complexity plots, and accepted-architecture plots. Saved inner runs are available through `loaded.training_run_history`; the loader currently exposes those records as dictionaries and does not reconstruct an `InnerLoopRecorder` or a live optimizer.
 
-QAdaptive is intended for research code where **structure search is part of the experiment**. The package favors:
+Live history entries can be dataclasses; loaded history entries are dictionaries. For example, select the lowest-cost archived accepted snapshot with:
 
-- explicit outer-loop plans,
-- inspectable histories,
-- warm starts after structural edits,
-- integration with Qiskit circuits and transpiler passes,
-- small building blocks that can be combined into larger adaptive strategies.
+```python
+best_index, best_record = min(
+    (
+        (index, record)
+        for index, record in enumerate(loaded.accepted_ansatz_history)
+        if record["cost"] is not None
+    ),
+    key=lambda item: item[1]["cost"],
+)
 
-## Current scope
+best_circuit = loaded.load_accepted_ansatz(best_index)
+best_params = dict(best_record["parameter_values"])
+best_cost = best_record["cost"]
+```
 
-QAdaptive is currently best understood as an **experimental research framework** for adaptive variational circuits in Qiskit. The public API is already useful, but it is still evolving. Users should expect some interfaces and helper names to change as the package matures.
+The loader validates the archive schema and the final parameter-vector shape. Notebook-added files such as `run_config.json` can be read separately:
+
+```python
+with (loaded.directory / "run_config.json").open("r", encoding="utf-8") as file:
+    saved_config = json.load(file)
+```
+
+### Optional inner-loop recording during execution
+
+To append inner-run events during training, configure the recorder before creating the trainer and experiment:
+
+```python
+recorder = InnerLoopRecorder(
+    record_initial_value=True,
+    record_gradients=True,
+    jsonl_path="results/inner_runs.jsonl",
+)
+```
+
+This JSON Lines stream contains run and recorded-step events. Use `experiment.save_history(...)` for the structured experiment archive.
 
 ## Testing
 
-The repository includes a `tests/` directory with unit tests covering core ansatz manipulation, mutation, pruning, simplification, trainer behavior, and utilities.
-
-To run the test suite locally:
+From the repository root, after installing QAdaptive:
 
 ```bash
-pytest
+python -m pip install pytest
+python -m pytest qadaptive/tests
 ```
 
-## Inspiration
+The tests cover circuit mutation, operator pools, pruning, simplification, training and recording, plotting, and archive save/load behaviour.
+
+## Project status and feedback
+
+QAdaptive is intended for research and experimentation. APIs and default strategies may evolve as the package develops.
+
+Bug reports, questions, and suggestions are welcome through [GitHub Issues](https://github.com/Diego---/QAdaptive/issues). Include a minimal example and the package versions used when reporting a problem.
+
+
+## Inspiration and attribution
 
 QAdaptive is inspired in part by the VAns framework introduced in:
 
@@ -337,15 +440,13 @@ M. Bilkis, M. Cerezo, G. Verdon, P. J. Coles, and L. Cincio,
 [*A semi-agnostic ansatz with variable structure for variational quantum algorithms*](https://doi.org/10.1007/s42484-023-00132-1),
 Quantum Machine Intelligence 5, 43 (2023).
 
-This package is an independent implementation and extension of related adaptive-ansatz ideas in a Qiskit-based workflow.
+QAdaptive provides an independent Qiskit-based toolkit for implementing and studying related adaptive circuit strategies.
 
-## Version
-
-The package metadata currently identifies QAdaptive as version `0.2` / `0.2.0`.
+If you use QAdaptive in research, reference [this repository](https://github.com/Diego---/QAdaptive) and the version or commit used. Cite the VAns paper when discussing the corresponding algorithmic ideas.
 
 ## Citation
 
-Coming soon
+Coming soon.
 
 ## License
 
