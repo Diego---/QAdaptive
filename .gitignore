@@ -5,4 +5,7 @@ QAE.code-workspace
 *.egg
 *.pyc
 *.ipynb
+!examples/
+!examples/*.ipynb
+.ipynb_checkpoints/
 /.vscode

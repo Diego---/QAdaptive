@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import matplotlib as plt
+
 import qiskit.qpy as qpy
 from qiskit.circuit import QuantumCircuit
 

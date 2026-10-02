@@ -1,13 +1,16 @@
 from __future__ import annotations
 import numpy as np
 
-from typing import Any, Literal
+from typing import Any, Callable, Literal, TYPE_CHECKING, TypeAlias
 from dataclasses import dataclass, field
 
 from qiskit.circuit import QuantumCircuit, Parameter
 
 from qadaptive.core.mutation import TwoQMap, LockId
 from qadaptive.outer.action_definitions import ACTION_DEFINITIONS, ActionDefinition
+
+if TYPE_CHECKING:
+    from qadaptive.outer.mutable_ansatz_experiment import MutableAnsatzExperiment
 
 AcceptanceMode = Literal["outer", "internal", "force"]
 
@@ -296,3 +299,14 @@ class OuterStepPlan:
     def extend(self, actions: list[ActionSpec]) -> None:
         """Append multiple atomic actions to the plan."""
         self.actions.extend(actions)
+
+
+OuterPlanBuilder: TypeAlias = Callable[
+    ["MutableAnsatzExperiment"],
+    OuterStepPlan | None,
+]
+
+OuterTerminationChecker: TypeAlias = Callable[
+    ["MutableAnsatzExperiment"],
+    bool,
+]
