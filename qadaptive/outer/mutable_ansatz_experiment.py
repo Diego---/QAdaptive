@@ -182,13 +182,25 @@ class MutableAnsatzExperiment:
         self.trainer.optimizer.reset_runtime_state(iteration)
         
     def _reset_inner_loop_termination_checker(self) -> None:
-        """Reset the inner-loop termination checker for the next training run."""
-        try:
-            self.trainer.optimizer.termination_checker.reset()
-        except AttributeError:
+        """Reset the active inner-loop termination checker for the next training run."""
+        checker = self.trainer.termination_checker
+
+        if checker is None:
+            checker = self.trainer.optimizer.termination_checker
+
+        if checker is None:
+            return
+
+        reset = getattr(checker, "reset", None)
+
+        if reset is None:
             logger.warning(
-                "Optimizer does not have a termination_checker with a reset method. Skipping termination checker reset."
+                "Inner-loop termination checker does not provide a reset method. "
+                "Skipping termination checker reset."
             )
+            return
+
+        reset()
 
     def get_latest_gradients(self) -> np.ndarray:
         """
