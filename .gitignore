@@ -9,3 +9,4 @@ QAE.code-workspace
 !examples/*.ipynb
 .ipynb_checkpoints/
 /.vscode
+/examples/results/
