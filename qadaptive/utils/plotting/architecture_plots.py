@@ -23,6 +23,7 @@ def _render_circuit(
     scale: float,
     dpi: int,
     idle_wires: bool,
+    fold: int = -1,
 ) -> np.ndarray:
     """
     Draw ``circuit`` in its own figure and return the tightly cropped RGBA image.
@@ -33,7 +34,7 @@ def _render_circuit(
     """
     circuit_fig = circuit.draw(
         output="mpl",
-        fold=-1,
+        fold=fold,
         idle_wires=idle_wires,
         scale=scale,
     )
@@ -61,6 +62,7 @@ def plot_architecture_evolution(
     figsize: tuple[float, float] | None = None,
     scale: float = 0.7,
     dpi: int = 150,
+    fold: int = -1,
     title_fontsize: float = 10,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
@@ -91,6 +93,12 @@ def plot_architecture_evolution(
     dpi : int, optional
         Resolution at which circuits are rasterised and the figure is created. Save the
         figure with the same dpi to keep the circuits at 1:1 resolution. Default is 150.
+    fold : int, optional
+        Sets pagination. It can be disabled using -1. In text, sets the length of the lines. 
+        This is useful when the drawing does not fit in the console. If None (default), it 
+        will try to guess the console width using shutil.get_terminal_size(). However, if 
+        running in jupyter, the default line length is set to 80 characters. In mpl, it is 
+        the number of (visual) layers before folding. Default is 25.
     title_fontsize : float, optional
         Font size of the per-snapshot titles. Default is 10.
 
@@ -130,7 +138,7 @@ def plot_architecture_evolution(
     ]
 
     images = [
-        _render_circuit(circuit, scale=scale, dpi=dpi, idle_wires=True)
+        _render_circuit(circuit, scale=scale, dpi=dpi, idle_wires=True, fold=fold)
         for circuit in circuits
     ]
 

@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 
-from typing import Callable
+from typing import Callable, Sequence
 from pathlib import Path
 
 from qiskit.circuit import QuantumCircuit, Parameter
@@ -2184,7 +2184,13 @@ class MutableAnsatzExperiment:
 
         return plot_outer_history(self.outer_step_history, **kwargs)
     
-    def plot_architecture_evolution(self, *, indices=None, figsize=None):
+    def plot_architecture_evolution(
+        self, 
+        *, 
+        indices: Sequence[int] | None = None, 
+        figsize: tuple[float, float] | None = None, 
+        fold: int =-1
+        ):
         """
         Draw selected accepted architecture snapshots.
 
@@ -2200,6 +2206,12 @@ class MutableAnsatzExperiment:
         figsize : tuple[float, float] | None, optional
             Overall figure size as ``(width, height)``. If None, height is computed
             dynamically based on qubit counts across selected circuits. Default is None.
+        fold : int, optional
+            Sets pagination. It can be disabled using -1. In text, sets the length of the lines. 
+            This is useful when the drawing does not fit in the console. If None (default), it 
+            will try to guess the console width using shutil.get_terminal_size(). However, if 
+            running in jupyter, the default line length is set to 80 characters. In mpl, it is 
+            the number of (visual) layers before folding. Default is 25.
 
         Returns
         -------
@@ -2214,6 +2226,7 @@ class MutableAnsatzExperiment:
             self.accepted_ansatz_history,
             indices=indices,
             figsize=figsize,
+            fold=fold,
         )
         
     def plot_complexity_evolution(self, **kwargs):
