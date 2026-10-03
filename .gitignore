@@ -10,3 +10,4 @@ QAE.code-workspace
 .ipynb_checkpoints/
 /.vscode
 /examples/results/
+/examples/logs/
