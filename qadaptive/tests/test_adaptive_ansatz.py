@@ -1,7 +1,7 @@
 import pytest, random
 import numpy as np
 
-from qiskit.circuit import QuantumCircuit, ParameterVector
+from qiskit.circuit import QuantumCircuit, ParameterVector, Parameter
 from qiskit.quantum_info import Operator
 
 from qadaptive.core.adaptive_ansatz import AdaptiveAnsatz
@@ -458,3 +458,99 @@ def test_rollback_raises_when_history_is_insufficient():
 
     with pytest.raises(ValueError):
         adaptive.rollback(1)
+
+def test_next_parameter_index_initializes_above_highest_existing_parameter():
+    circuit = QuantumCircuit(1)
+
+    theta_2 = Parameter("θ_2")
+    theta_7 = Parameter("θ_7")
+
+    circuit.rx(theta_2, 0)
+    circuit.ry(theta_7, 0)
+
+    ansatz = AdaptiveAnsatz(circuit)
+
+    assert ansatz._next_parameter_index == 8
+
+def test_parameter_indices_are_not_reused_after_removal():
+    circuit = QuantumCircuit(1)
+
+    theta_0 = Parameter("θ_0")
+    theta_1 = Parameter("θ_1")
+
+    circuit.rx(theta_0, 0)
+    circuit.ry(theta_1, 0)
+
+    ansatz = AdaptiveAnsatz(circuit)
+
+    qubit = ansatz.current_ansatz.qubits[0]
+
+    # Introduces θ_2.
+    ansatz.add_gate_at_index(
+        gate_name="rz",
+        index=len(ansatz.current_ansatz.data),
+        qubits=[qubit],
+    )
+
+    assert ansatz._next_parameter_index == 3
+    assert "θ_2" in [param.name for param in ansatz.params]
+
+    # Remove the gate carrying θ_2.
+    ansatz.remove_gate_by_index(len(ansatz.current_ansatz.data) - 1)
+
+    assert "θ_2" not in [param.name for param in ansatz.params]
+
+    # The identity counter must not move backwards.
+    assert ansatz._next_parameter_index == 3
+
+    # A newly inserted parameter must be θ_3, not recycled θ_2.
+    ansatz.add_gate_at_index(
+        gate_name="rz",
+        index=len(ansatz.current_ansatz.data),
+        qubits=[qubit],
+    )
+
+    parameter_names = [param.name for param in ansatz.params]
+
+    assert "θ_3" in parameter_names
+    assert ansatz._next_parameter_index == 4
+
+def test_copy_preserves_next_parameter_index_after_parameter_removal():
+    circuit = QuantumCircuit(1)
+
+    theta_0 = Parameter("θ_0")
+    circuit.rx(theta_0, 0)
+
+    ansatz = AdaptiveAnsatz(circuit)
+    qubit = ansatz.current_ansatz.qubits[0]
+
+    # Create θ_1.
+    ansatz.add_gate_at_index(
+        gate_name="ry",
+        index=len(ansatz.current_ansatz.data),
+        qubits=[qubit],
+    )
+
+    assert ansatz._next_parameter_index == 2
+
+    # Remove θ_1, leaving only θ_0 active.
+    ansatz.remove_gate_by_index(len(ansatz.current_ansatz.data) - 1)
+
+    assert [param.name for param in ansatz.params] == ["θ_0"]
+    assert ansatz._next_parameter_index == 2
+
+    copied = ansatz.copy()
+
+    # The copy must remember that θ_1 has already existed.
+    assert copied._next_parameter_index == 2
+
+    copied_qubit = copied.current_ansatz.qubits[0]
+
+    copied.add_gate_at_index(
+        gate_name="ry",
+        index=len(copied.current_ansatz.data),
+        qubits=[copied_qubit],
+    )
+
+    assert "θ_2" in [param.name for param in copied.params]
+    assert copied._next_parameter_index == 3

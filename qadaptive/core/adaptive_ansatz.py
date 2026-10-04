@@ -62,6 +62,7 @@ class AdaptiveAnsatz:
 
         # Set up parameters
         self._validate_parameter_names()
+        self._next_parameter_index = 0
         self.update_params()
         
         # Initialize a list to track the history
@@ -163,16 +164,16 @@ class AdaptiveAnsatz:
         list[Parameter]
             The newly created parameters.
         """
-        if n < 0:
-            raise ValueError("Number of new parameters must be non-negative.")
+        start = self._next_parameter_index
 
-        if not self.params:
-            start = 0
-        else:
-            start = max(int(p.name.split("_")[1]) for p in self.params) + 1
+        new_params = [
+            Parameter(f"θ_{i}")
+            for i in range(start, start + n)
+        ]
 
-        new_params = [Parameter(f"θ_{i}") for i in range(start, start + n)]
+        self._next_parameter_index += n
         self.params.extend(new_params)
+
         return new_params
     
     def extend_operator_pool(self, operators: list[str]) -> None:
@@ -449,8 +450,21 @@ class AdaptiveAnsatz:
     def update_params(self) -> None:
         """
         Synchronize `self.params` with the parameters currently present in `current_ansatz`.
+
+        Parameter indices are never reused during the lifetime of an AdaptiveAnsatz.
         """
         self.params = list(self.current_ansatz.parameters)
+
+        next_from_active = (
+            max(int(param.name.split("_")[1]) for param in self.params) + 1
+            if self.params
+            else 0
+        )
+
+        self._next_parameter_index = max(
+            self._next_parameter_index,
+            next_from_active,
+        )
 
     def copy(self) -> "AdaptiveAnsatz":
         """
@@ -473,5 +487,7 @@ class AdaptiveAnsatz:
             new_obj.history = [qc.copy() for qc in self.history]
         else:
             new_obj.history = []
+            
+        new_obj._next_parameter_index = self._next_parameter_index
 
         return new_obj
