@@ -43,6 +43,7 @@ class SPSA(StepwiseOptimizer):
         learning_rate: float | np.ndarray | Callable[..., Iterator[float]] | None = None,
         perturbation: float | np.ndarray | Callable[..., Iterator[float]] | None = None,
         start_point: int = 0,
+        parameter_dependent_schedules: bool = False,
         last_avg: int = 1,
         resamplings: int | dict[int, int] = 1,
         perturbation_dims: int | None = None,
@@ -73,6 +74,9 @@ class SPSA(StepwiseOptimizer):
             Perturbation schedule.
         start_point : int, optional
             Default schedule offset for a fresh initialization.
+        parameter_dependent_schedules : bool, optional
+        If True, learning-rate and perturbation schedules are tracked independently
+        for each parameter according to its lifetime in the optimization. Defaults to False.
         last_avg : int, optional
             Number of final iterates to average when using ``minimize``.
         resamplings : int | dict[int, int], optional
@@ -106,6 +110,7 @@ class SPSA(StepwiseOptimizer):
         self.learning_rate = learning_rate
         self.perturbation = perturbation
         self.start_point = start_point
+        self.parameter_dependent_schedules = parameter_dependent_schedules
 
         self.last_avg = last_avg
         self.resamplings = resamplings
@@ -121,6 +126,10 @@ class SPSA(StepwiseOptimizer):
         self.lr_iterator: Iterator[float] | None = None
         self._lr_iterator_copy: Iterator[float] | None = None
         self.p_iterator: Iterator[float] | None = None
+        
+        # Parameter-dependent schedule state
+        self._parameter_schedule_steps: dict[str, int] = {}
+        self._active_parameter_names: tuple[str, ...] = ()
 
         # 2-SPSA state
         self._smoothed_hessian: np.ndarray | None = None
@@ -176,6 +185,57 @@ class SPSA(StepwiseOptimizer):
             "initial_hessian": self.initial_hessian,
             "callback": self.callback,
             "termination_checker": self.termination_checker,
+        }
+        
+    @property
+    def parameter_schedule_steps(self) -> dict[str, int]:
+        """
+        Return the current per-parameter SPSA schedule indices.
+
+        Returns
+        -------
+        dict[str, int]
+            Mapping from parameter name to the number of SPSA schedule steps
+            already consumed by that parameter.
+        """
+        return dict(self._parameter_schedule_steps)
+    
+    def _reconcile_parameter_schedule_steps(
+        self,
+        parameter_names: list[str] | tuple[str, ...],
+    ) -> None:
+        """
+        Reconcile per-parameter schedule state with the currently active parameters.
+
+        Surviving parameters retain their schedule step, newly introduced
+        parameters start at zero, and parameters no longer present are discarded.
+        """
+        parameter_names = tuple(parameter_names)
+
+        if len(parameter_names) != len(set(parameter_names)):
+            raise ValueError("Parameter names must be unique.")
+
+        self._parameter_schedule_steps = {
+            name: self._parameter_schedule_steps.get(name, 0)
+            for name in parameter_names
+        }
+
+        self._active_parameter_names = parameter_names
+        
+    def _advance_parameter_schedule_steps(self) -> None:
+        """Advance the SPSA schedule of every currently active parameter by one step."""
+        for name in self._active_parameter_names:
+            self._parameter_schedule_steps[name] += 1
+        
+    def restart_parameter_schedules(self) -> None:
+        """
+        Restart the SPSA schedules of all currently active parameters.
+
+        Each active parameter's schedule step is reset to zero.
+        """
+        self._parameter_schedule_steps = {
+            name: 0
+            for name in self._active_parameter_names
         }
 
     def get_support_level(self) -> dict[str, OptimizerSupportLevel]:
@@ -494,6 +554,7 @@ class SPSA(StepwiseOptimizer):
         x0: np.ndarray,
         loss_function: Callable[[np.ndarray], float],
         iteration_start: int | None = None,
+        parameter_names: list[str] | tuple[str, ...] | None = None,
         **kwargs,
     ) -> None:
         """
@@ -507,11 +568,24 @@ class SPSA(StepwiseOptimizer):
             Objective function.
         iteration_start : int | None, optional
             Schedule offset for the new run. If None, ``self.start_point`` is used.
+        parameter_names : list[str] | tuple[str, ...] | None, optional
+            Names of parameters corresponding to the entries of ``x0``.
         **kwargs
             Additional keyword arguments forwarded to calibration and objective evaluation.
         """
         logger.info("Initializing SPSA optimizer.")
         x0 = np.asarray(x0, dtype=float)
+        
+        if self.parameter_dependent_schedules:
+            if parameter_names is None:
+                parameter_names = tuple(str(i) for i in range(x0.size))
+
+            if len(parameter_names) != x0.size:
+                raise ValueError(
+                    "Length of parameter_names must match the parameter vector dimension."
+                )
+
+            self._reconcile_parameter_schedule_steps(parameter_names)
 
         if iteration_start is None:
             iteration_start = self._iteration if self._initialized else self.start_point
@@ -912,6 +986,8 @@ class SPSA(StepwiseOptimizer):
 
         self._iteration = next_iteration
         self._steps_in_run += 1
+        if self.parameter_dependent_schedules:
+            self._advance_parameter_schedule_steps()
         self._last_gradient = np.asarray(gradient_estimate, dtype=float)
         self._last_fx = float(fx_estimate)
         self._last_stepsize = None if skip else float(np.linalg.norm(x_next - x))

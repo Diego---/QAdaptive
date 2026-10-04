@@ -11,3 +11,9 @@ QAE.code-workspace
 /.vscode
 /examples/results/
 /examples/logs/
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.lcov

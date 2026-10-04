@@ -326,6 +326,7 @@ class InnerLoopTrainer:
                 x,
                 loss_function,
                 iteration_start=iteration_start,
+                parameter_names=param_names,
                 **loss_kwargs,
             )
 
