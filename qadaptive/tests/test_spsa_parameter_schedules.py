@@ -182,3 +182,141 @@ def test_parameter_dependent_schedules_reject_second_order_spsa():
             parameter_dependent_schedules=True,
             second_order=True,
         )
+
+def test_point_sample_supports_parameter_dependent_perturbations():
+    optimizer = SPSA(
+        learning_rate=0.1,
+        perturbation=0.1,
+        parameter_dependent_schedules=True,
+    )
+
+    evaluated_points = []
+
+    def linear_loss(x):
+        x = np.asarray(x, dtype=float)
+        evaluated_points.append(x.copy())
+        return 2.0 * x[0] + 3.0 * x[1]
+
+    x = np.array([1.0, 2.0])
+    eps = np.array([0.2, 0.1])
+    delta = np.array([1.0, -1.0])
+
+    fx, gradient, hessian = optimizer._point_sample(
+        linear_loss,
+        x,
+        eps,
+        delta,
+    )
+
+    np.testing.assert_allclose(
+        evaluated_points[0],
+        np.array([1.2, 1.9]),
+    )
+    np.testing.assert_allclose(
+        evaluated_points[1],
+        np.array([0.8, 2.1]),
+    )
+
+    np.testing.assert_allclose(
+        gradient,
+        np.array([0.5, -1.0]),
+    )
+
+    assert fx == pytest.approx(8.0)
+    assert hessian is None
+
+def test_process_update_uses_parameter_dependent_learning_rates():
+    optimizer = SPSA(
+        parameter_dependent_schedules=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.8,
+        alpha=0.5,
+        c=0.2,
+        gamma=0.25,
+        stability_constant=0.0,
+    )
+
+    x = np.array([1.0, 2.0])
+    gradient = np.array([2.0, 3.0])
+
+    optimizer.initialize(
+        x,
+        lambda x: float(np.sum(x**2)),
+        parameter_names=["θ_0", "θ_1"],
+    )
+
+    optimizer._parameter_schedule_steps = {
+        "θ_0": 0,
+        "θ_1": 3,
+    }
+
+    skip, x_next, fx_next = optimizer.process_update(
+        gradient_estimate=gradient,
+        x=x,
+        fx=0.0,
+        fun=lambda x: float(np.sum(x**2)),
+        fun_next=None,
+    )
+
+    expected_learning_rates = np.array([
+        0.8 / 1**0.5,
+        0.8 / 4**0.5,
+    ])
+
+    expected_update = gradient * expected_learning_rates
+    expected_x_next = x - expected_update
+
+    assert not skip
+    assert fx_next is None
+
+    np.testing.assert_allclose(
+        x_next,
+        expected_x_next,
+    )
+
+def test_parameter_dependent_step_uses_current_schedule_then_advances(
+    monkeypatch,
+):
+    optimizer = SPSA(
+        parameter_dependent_schedules=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.8,
+        alpha=0.5,
+        c=0.2,
+        gamma=0.25,
+        stability_constant=0.0,
+    )
+
+    x = np.array([1.0, 2.0])
+
+    optimizer.initialize(
+        x,
+        lambda x: 2.0 * x[0] + 3.0 * x[1],
+        parameter_names=["θ_0", "θ_1"],
+    )
+
+    optimizer._parameter_schedule_steps = {
+        "θ_0": 0,
+        "θ_1": 3,
+    }
+
+    monkeypatch.setattr(
+        "qadaptive.training.optimizers.spsa.bernoulli_perturbation",
+        lambda dim, perturbation_dims=None: np.array([1.0, -1.0]),
+    )
+
+    skip, x_next, _, gradient, _ = optimizer.step(
+        x,
+        lambda x: 2.0 * x[0] + 3.0 * x[1],
+    )
+
+    assert not skip
+
+    assert optimizer.parameter_schedule_steps == {
+        "θ_0": 1,
+        "θ_1": 4,
+    }
