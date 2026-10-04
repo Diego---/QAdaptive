@@ -239,6 +239,7 @@ class InnerLoopTrainer:
         initial_value: float | None = None,
         outer_iteration: int | None = None,
         action: str | None = None,
+        restart_parameter_schedules: bool = False,
         note: str | None = None,
         **kwargs,
     ) -> OptimizerResult:
@@ -271,6 +272,9 @@ class InnerLoopTrainer:
             Outer-loop iteration associated with this training run.
         action : str | None, optional
             Structural action associated with this training run.
+        restart_parameter_schedules : bool, optional
+            If True, the optimizer's parameter schedules are reset to their initial
+            state.
         note : str | None, optional
             Optional run annotation.
         **kwargs
@@ -329,6 +333,21 @@ class InnerLoopTrainer:
                 parameter_names=param_names,
                 **loss_kwargs,
             )
+            
+            if restart_parameter_schedules:
+                restart_schedules = getattr(
+                    self.optimizer,
+                    "restart_parameter_schedules",
+                    None,
+                )
+
+                if restart_schedules is None:
+                    raise RuntimeError(
+                        "Parameter schedule restart was requested, but the active "
+                        "optimizer does not support parameter-dependent schedules."
+                    )
+
+                restart_schedules()
 
             while k < iterations:
                 k += 1

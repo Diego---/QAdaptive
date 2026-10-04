@@ -265,6 +265,12 @@ class SPSA(StepwiseOptimizer):
 
         Each active parameter's schedule step is reset to zero.
         """
+        if not self.parameter_dependent_schedules:
+            raise RuntimeError(
+                "Cannot restart parameter schedules when "
+                "parameter_dependent_schedules=False."
+            )
+
         self._parameter_schedule_steps = {
             name: 0
             for name in self._active_parameter_names

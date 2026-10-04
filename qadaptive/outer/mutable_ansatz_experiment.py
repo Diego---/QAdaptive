@@ -780,6 +780,7 @@ class MutableAnsatzExperiment:
         trainer_iteration_reset: int | None = None,
         outer_iteration: int | None = None,
         action: str | None = None,
+        restart_parameter_schedules: bool = False,
         note: str | None = None,
         **kwargs
         ) -> OptimizerResult:
@@ -806,6 +807,9 @@ class MutableAnsatzExperiment:
             Outer-loop iteration associated with this training run.
         action : str | None, optional
             Structural action associated with this training run.
+        restart_parameter_schedules : bool, optional
+            If `True`, reset any internal parameter schedules in the optimizer before
+            training begins. Defaults to `False`.
         note : str | None, optional
             Optional annotation stored with this training run.
         **kwargs
@@ -839,6 +843,7 @@ class MutableAnsatzExperiment:
             iteration_start=trainer_iteration_reset,
             outer_iteration=outer_iteration,
             action=action,
+            restart_parameter_schedules=restart_parameter_schedules,
             note=note,
             **kwargs,
         )
@@ -876,6 +881,7 @@ class MutableAnsatzExperiment:
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
         record_parameter_memory: bool = True,
+        restart_parameter_schedules_after_pruning: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         metropolis_temperature: float | None = None,
@@ -974,7 +980,26 @@ class MutableAnsatzExperiment:
         )
 
         # Execute the structural change proposal.
-        self.execute_action_plan(plan, cost=loss_function)
+        action_results = self.execute_action_plan(
+            plan,
+            cost=loss_function,
+        )
+
+        pruning_applied = any(
+            spec.action == PRUNE_TWO_QUBIT and result is True
+            for spec, result in zip(plan.actions, action_results)
+        )
+
+        restart_parameter_schedules = (
+            restart_parameter_schedules_after_pruning
+            and pruning_applied
+        )
+
+        if restart_parameter_schedules:
+            logger.info(
+                "A pruning action was applied; parameter-dependent SPSA "
+                "schedules will restart before retraining."
+            )
 
         train_result: OptimizerResult | None = None
         training_run = None
@@ -1021,6 +1046,7 @@ class MutableAnsatzExperiment:
                 trainer_iteration_reset=trainer_iteration_reset,
                 outer_iteration=self._outer_iteration,
                 action=plan.display_name,
+                restart_parameter_schedules=restart_parameter_schedules,
                 **train_kwargs,
             )
             training_run = self.trainer.recorder.last_run
@@ -1205,6 +1231,7 @@ class MutableAnsatzExperiment:
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
         record_parameter_memory: bool = True,
+        restart_parameter_schedules_after_pruning: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         metropolis_temperature: float | None = None,
@@ -1266,6 +1293,9 @@ class MutableAnsatzExperiment:
             Default value assigned to newly introduced parameters when warm-starting.
         record_parameter_memory : bool, optional
             Whether to append parameter-memory records for each attempted outer step.
+        restart_parameter_schedules_after_pruning : bool, optional
+            Whether to restart any internal parameter schedules in the optimizer after
+            a pruning action is applied.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -1453,6 +1483,7 @@ class MutableAnsatzExperiment:
                     reuse_parameter_memory=reuse_parameter_memory,
                     default_value_for_new_params=default_value_for_new_params,
                     record_parameter_memory=record_parameter_memory,
+                    restart_parameter_schedules_after_pruning=restart_parameter_schedules_after_pruning,
                     accept_tol=accept_tol,
                     complexity_penalty=complexity_penalty,
                     metropolis_temperature=metropolis_temperature,
@@ -1580,7 +1611,7 @@ class MutableAnsatzExperiment:
             reset_locks_on_ambiguity=kwargs.get("reset_locks_on_ambiguity", True),
         )
 
-    def _action_prune_two_qubit(self, **kwargs) -> None:
+    def _action_prune_two_qubit(self, **kwargs) -> bool:
         """Apply one structural two-qubit pruning proposal."""
         gate_to_remove = kwargs.get("gate_to_remove")
 
@@ -1600,15 +1631,17 @@ class MutableAnsatzExperiment:
                 kwargs.get("target_pair"),
                 kwargs.get("target_occurrence"),
             )
-            return
+            return False
 
-        self.apply_two_qubit_pruning_proposal(gate_to_remove=gate_to_remove)
+        return self.apply_two_qubit_pruning_proposal(
+            gate_to_remove=gate_to_remove
+        )
         
     def _apply_action(
         self,
         spec: ActionSpec,
         cost: Callable[[np.ndarray, QuantumCircuit], float] | None = None,
-    ) -> None:
+    ) -> bool | None:
         """
         Apply one validated atomic action.
 
@@ -1644,15 +1677,15 @@ class MutableAnsatzExperiment:
                 raise ValueError(
                     f"Action '{spec.action}' requires a cost callable."
                 )
-            registry[spec.action](cost=cost, **spec.kwargs)
-        else:
-            registry[spec.action](**spec.kwargs)
+            return registry[spec.action](cost=cost, **spec.kwargs)
+            
+        return registry[spec.action](**spec.kwargs)
         
     def execute_action_plan(
         self,
         plan: OuterStepPlan,
         cost: Callable[[np.ndarray, QuantumCircuit], float] | None = None,
-    ) -> None:
+    ) -> list[bool | None]:
         """
         Execute all atomic actions contained in an outer-step plan.
         
@@ -1664,19 +1697,31 @@ class MutableAnsatzExperiment:
         cost : Callable[[np.ndarray, QuantumCircuit], float] | None, optional
             Objective function required by actions that internally evaluate the
             ansatz, currently ``"prune_two_qubit"``.
+            
+        Returns
+        -------
+        list[bool | None]
+            Return value of each executed action, in plan order.
         
         Raises
         ------
         ValueError
             If any action in the plan is unknown or if a required argument is missing.
         """
+        results = []
+
         for i, spec in enumerate(plan.actions):
             logger.info(
                 "Executing action %s/%s.",
                 i + 1,
                 len(plan.actions),
             )
-            self._apply_action(spec, cost=cost)
+
+            results.append(
+                self._apply_action(spec, cost=cost)
+            )
+
+        return results
     
     def _snapshot_state(self) -> ExperimentSnapshot:
         """
