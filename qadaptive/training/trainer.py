@@ -273,8 +273,8 @@ class InnerLoopTrainer:
         action : str | None, optional
             Structural action associated with this training run.
         restart_parameter_schedules : bool, optional
-            If True, the optimizer's parameter schedules are reset to their initial
-            state.
+            If True, restart the optimizer's per-parameter schedules after optimizer
+            initialization and before the first training step. Defaults to False.
         note : str | None, optional
             Optional run annotation.
         **kwargs

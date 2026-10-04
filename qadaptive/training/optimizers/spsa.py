@@ -75,8 +75,9 @@ class SPSA(StepwiseOptimizer):
         start_point : int, optional
             Default schedule offset for a fresh initialization.
         parameter_dependent_schedules : bool, optional
-        If True, learning-rate and perturbation schedules are tracked independently
-        for each parameter according to its lifetime in the optimization. Defaults to False.
+            If True, learning-rate and perturbation schedules are tracked independently
+            for each parameter. Newly introduced parameters start from schedule step zero,
+            while surviving parameters retain their current schedule step. Defaults to False.
         last_avg : int, optional
             Number of final iterates to average when using ``minimize``.
         resamplings : int | dict[int, int], optional
@@ -99,6 +100,13 @@ class SPSA(StepwiseOptimizer):
             Optional callback.
         termination_checker : TERMINATIONCHECKER | None, optional
             Optional termination checker.
+            
+        Raises
+        ------
+        ValueError
+            If ``parameter_dependent_schedules=True`` together with
+            ``second_order=True``, since parameter-dependent schedules are currently
+            supported only for first-order SPSA.
         """
         super().__init__(callback=callback, termination_checker=termination_checker)
         

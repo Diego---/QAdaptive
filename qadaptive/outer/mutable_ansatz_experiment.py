@@ -808,8 +808,8 @@ class MutableAnsatzExperiment:
         action : str | None, optional
             Structural action associated with this training run.
         restart_parameter_schedules : bool, optional
-            If `True`, reset any internal parameter schedules in the optimizer before
-            training begins. Defaults to `False`.
+            If `True`, restart the optimizer's per-parameter schedules before training
+            begins. Defaults to `False`.
         note : str | None, optional
             Optional annotation stored with this training run.
         **kwargs
@@ -922,6 +922,10 @@ class MutableAnsatzExperiment:
             Default value for parameters not yet present in `parameter_memory`.
         record_parameter_memory : bool, optional
             Whether to append a parameter-memory record for this attempted step.
+        restart_parameter_schedules_after_pruning : bool, optional
+            If True, restart the optimizer's per-parameter schedules before retraining
+            when a pruning action is successfully applied. A skipped pruning action does
+            not trigger a restart. Defaults to False.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -1294,8 +1298,9 @@ class MutableAnsatzExperiment:
         record_parameter_memory : bool, optional
             Whether to append parameter-memory records for each attempted outer step.
         restart_parameter_schedules_after_pruning : bool, optional
-            Whether to restart any internal parameter schedules in the optimizer after
-            a pruning action is applied.
+            If True, restart the optimizer's per-parameter schedules before retraining
+            whenever a pruning action is successfully applied. Skipped pruning actions
+            do not trigger a restart. Defaults to False.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -1612,7 +1617,15 @@ class MutableAnsatzExperiment:
         )
 
     def _action_prune_two_qubit(self, **kwargs) -> bool:
-        """Apply one structural two-qubit pruning proposal."""
+        """
+        Apply one structural two-qubit pruning proposal.
+
+        Returns
+        -------
+        bool
+            True if a pruning proposal was successfully applied, False if the
+            requested pruning target no longer exists or no proposal could be applied.
+        """
         gate_to_remove = kwargs.get("gate_to_remove")
 
         if gate_to_remove is None and "target_occurrence" in kwargs and "target_pair" in kwargs:
@@ -1656,8 +1669,13 @@ class MutableAnsatzExperiment:
             - ``"simplify"``
             - ``"prune_two_qubit"``
         cost : Callable[[np.ndarray, QuantumCircuit], float] | None, optional
-            Objective function required by actions that internally evaluate the
-            ansatz, currently ``"prune_two_qubit"``.
+            Objective function supplied to actions that require objective evaluation.
+            
+        Returns
+        -------
+        bool | None
+            Return value of the executed action handler. Most actions return None;
+            pruning actions return whether pruning was successfully applied.
 
         Raises
         ------
@@ -1695,13 +1713,14 @@ class MutableAnsatzExperiment:
             Structured plan containing a sequence of atomic actions to apply to the
             current ansatz.
         cost : Callable[[np.ndarray, QuantumCircuit], float] | None, optional
-            Objective function required by actions that internally evaluate the
-            ansatz, currently ``"prune_two_qubit"``.
+            Objective function supplied to actions that require objective evaluation.
             
         Returns
         -------
         list[bool | None]
-            Return value of each executed action, in plan order.
+            Return values of the executed action handlers, in plan order. Most actions
+            return None; pruning actions return True when pruning was successfully
+            applied and False when it was skipped.
         
         Raises
         ------
