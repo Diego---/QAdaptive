@@ -9,6 +9,7 @@ from qiskit_algorithms.optimizers.optimizer import (
 
 from qadaptive.training.trainer import InnerLoopTrainer
 from qadaptive.training.optimizers.stepwise_optimizer import StepwiseOptimizer
+from qadaptive.training.optimizers.spsa import SPSA
 from qadaptive.training.recorder import InnerLoopRecorder
 
 
@@ -238,3 +239,33 @@ def test_train_one_time_reuses_the_same_recorder_across_runs():
     assert trainer.training_run_history[0].action == "action_0"
     assert trainer.training_run_history[1].action == "action_1"
     assert trainer.last_training_run_record is trainer.training_run_history[-1]
+
+
+
+def test_trainer_records_parameter_dependent_spsa_schedule_values():
+    optimizer = SPSA(
+        learning_rate=0.2,
+        perturbation=0.1,
+        parameter_dependent_schedules=True,
+    )
+    recorder = InnerLoopRecorder()
+    trainer = InnerLoopTrainer(optimizer=optimizer, recorder=recorder)
+    ansatz = build_parameterized_ansatz()
+
+    trainer.train_one_time(
+        ansatz=ansatz,
+        loss_function=quadratic_loss,
+        initial_point=np.array([0.5, -0.5]),
+        iterations=1,
+    )
+
+    iteration = recorder.last_run.iterations[0]
+    names = [parameter.name for parameter in ansatz.parameters]
+
+    assert iteration.schedule_steps_used == {name: 0 for name in names}
+    assert iteration.learning_rates == pytest.approx(
+        {name: 0.2 for name in names}
+    )
+    assert iteration.perturbations == pytest.approx(
+        {name: 0.1 for name in names}
+    )

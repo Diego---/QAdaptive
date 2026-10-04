@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,27 @@ def _nominal_and_std(value: Any) -> tuple[float, float | None]:
     nominal = getattr(value, "nominal_value", value)
     std = getattr(value, "std_dev", None)
     return float(nominal), None if std is None else float(std)
+
+
+def _copy_parameter_mapping(
+    values: Mapping[str, Any] | None,
+    *,
+    active_parameter_names: Sequence[str],
+    cast: Callable[[Any], Any],
+    label: str,
+) -> dict[str, Any] | None:
+    """Validate and copy a parameter-keyed optimizer diagnostic mapping."""
+    if values is None:
+        return None
+
+    copied = {str(name): cast(value) for name, value in values.items()}
+    unknown = set(copied).difference(active_parameter_names)
+    if unknown:
+        raise ValueError(
+            f"{label} contains parameters not active in this run: "
+            f"{sorted(unknown)}."
+        )
+    return copied
 
 
 class InnerLoopRecorder:
@@ -127,6 +148,9 @@ class InnerLoopRecorder:
         stepsize: float,
         accepted: bool,
         gradient: Sequence[float] | np.ndarray | None = None,
+        schedule_steps_used: Mapping[str, int] | None = None,
+        learning_rates: Mapping[str, float] | None = None,
+        perturbations: Mapping[str, float] | None = None,
     ) -> IterationRecord:
         """Record one inner-loop optimizer step in the active run."""
         if self._active_run is None:
@@ -147,6 +171,25 @@ class InnerLoopRecorder:
                     f"Gradient has shape {gradient_array.shape}, expected {expected_shape}."
                 )
 
+        schedule_steps_mapping = _copy_parameter_mapping(
+            schedule_steps_used,
+            active_parameter_names=self._active_run.param_names,
+            cast=int,
+            label="schedule_steps_used",
+        )
+        learning_rate_mapping = _copy_parameter_mapping(
+            learning_rates,
+            active_parameter_names=self._active_run.param_names,
+            cast=float,
+            label="learning_rates",
+        )
+        perturbation_mapping = _copy_parameter_mapping(
+            perturbations,
+            active_parameter_names=self._active_run.param_names,
+            cast=float,
+            label="perturbations",
+        )
+
         extra_value = None
         extra_std = None
         step_number = len(self._active_run.iterations) + 1
@@ -164,6 +207,9 @@ class InnerLoopRecorder:
             stepsize=float(stepsize),
             accepted=bool(accepted),
             gradient=gradient_array,
+            schedule_steps_used=schedule_steps_mapping,
+            learning_rates=learning_rate_mapping,
+            perturbations=perturbation_mapping,
             extra_value=extra_value,
             extra_std=extra_std,
         )
@@ -352,6 +398,46 @@ class InnerLoopRecorder:
             **kwargs,
         )
 
+    def plot_learning_rates(
+        self,
+        *,
+        parameters: list[str] | None = None,
+        **kwargs,
+    ):
+        """Plot recorded per-parameter SPSA learning rates."""
+        from qadaptive.utils.plotting.parameter_plots import (
+            plot_parameter_schedule_history,
+        )
+
+        return plot_parameter_schedule_history(
+            self.runs,
+            attribute="learning_rates",
+            parameters=parameters,
+            ylabel="Learning rate",
+            title="Per-parameter SPSA learning rates",
+            **kwargs,
+        )
+
+    def plot_perturbations(
+        self,
+        *,
+        parameters: list[str] | None = None,
+        **kwargs,
+    ):
+        """Plot recorded per-parameter SPSA perturbation strengths."""
+        from qadaptive.utils.plotting.parameter_plots import (
+            plot_parameter_schedule_history,
+        )
+
+        return plot_parameter_schedule_history(
+            self.runs,
+            attribute="perturbations",
+            parameters=parameters,
+            ylabel="Perturbation strength",
+            title="Per-parameter SPSA perturbations",
+            **kwargs,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable representation of the recorder."""
         return {
@@ -382,6 +468,9 @@ class InnerLoopRecorder:
             "gradient": None
             if record.gradient is None
             else np.asarray(record.gradient, dtype=float).tolist(),
+            "schedule_steps_used": record.schedule_steps_used,
+            "learning_rates": record.learning_rates,
+            "perturbations": record.perturbations,
             "extra_value": record.extra_value,
             "extra_std": record.extra_std,
         }

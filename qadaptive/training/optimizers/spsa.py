@@ -145,6 +145,14 @@ class SPSA(StepwiseOptimizer):
         self._parameter_schedule_steps: dict[str, int] = {}
         self._active_parameter_names: tuple[str, ...] = ()
 
+        # Diagnostics for the most recent parameter-dependent SPSA step.
+        # These store the schedule state actually used before the per-parameter
+        # ages are advanced at the end of the step.
+        self._last_parameter_schedule_steps_used: dict[str, int] | None = None
+        self._last_parameter_learning_rates: dict[str, float] | None = None
+        self._last_parameter_perturbations: dict[str, float] | None = None
+        self._pending_parameter_learning_rates: np.ndarray | None = None
+
         # 2-SPSA state
         self._smoothed_hessian: np.ndarray | None = None
         self._active_lse_solver: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None
@@ -214,6 +222,27 @@ class SPSA(StepwiseOptimizer):
             already consumed by that parameter.
         """
         return dict(self._parameter_schedule_steps)
+
+    @property
+    def last_parameter_schedule_steps_used(self) -> dict[str, int] | None:
+        """Return per-parameter schedule indices used by the most recent step."""
+        if self._last_parameter_schedule_steps_used is None:
+            return None
+        return dict(self._last_parameter_schedule_steps_used)
+
+    @property
+    def last_parameter_learning_rates(self) -> dict[str, float] | None:
+        """Return per-parameter learning rates used by the most recent step."""
+        if self._last_parameter_learning_rates is None:
+            return None
+        return dict(self._last_parameter_learning_rates)
+
+    @property
+    def last_parameter_perturbations(self) -> dict[str, float] | None:
+        """Return per-parameter perturbations used by the most recent step."""
+        if self._last_parameter_perturbations is None:
+            return None
+        return dict(self._last_parameter_perturbations)
     
     def _reconcile_parameter_schedule_steps(
         self,
@@ -266,6 +295,7 @@ class SPSA(StepwiseOptimizer):
 
         self._parameter_schedule_steps = dict(schedule_steps)
         self._active_parameter_names = tuple(schedule_steps)
+        self._pending_parameter_learning_rates = None
         
     def restart_parameter_schedules(self) -> None:
         """
@@ -283,6 +313,7 @@ class SPSA(StepwiseOptimizer):
             name: 0
             for name in self._active_parameter_names
         }
+        self._pending_parameter_learning_rates = None
         
     def _get_parameter_schedule_values(
         self,
@@ -677,6 +708,11 @@ class SPSA(StepwiseOptimizer):
         """
         logger.info("Initializing SPSA optimizer.")
         x0 = np.asarray(x0, dtype=float)
+
+        self._last_parameter_schedule_steps_used = None
+        self._last_parameter_learning_rates = None
+        self._last_parameter_perturbations = None
+        self._pending_parameter_learning_rates = None
         
         if self.parameter_dependent_schedules:
             if parameter_names is None:
@@ -921,7 +957,19 @@ class SPSA(StepwiseOptimizer):
             self._create_iterators(fun=loss, x0=x, n_start=max(iteration - 1, 0), **kwargs)
 
         if self.parameter_dependent_schedules:
-            _, eps = self._get_parameter_schedule_values()
+            learning_rates, eps = self._get_parameter_schedule_values()
+            self._pending_parameter_learning_rates = learning_rates.copy()
+            self._last_parameter_schedule_steps_used = dict(
+                self._parameter_schedule_steps
+            )
+            self._last_parameter_learning_rates = {
+                name: float(value)
+                for name, value in zip(self._active_parameter_names, learning_rates)
+            }
+            self._last_parameter_perturbations = {
+                name: float(value)
+                for name, value in zip(self._active_parameter_names, eps)
+            }
         else:
             eps = next(self.p_iterator)
         fx_estimate, gradient, hessian = self._point_estimate(
@@ -1004,7 +1052,26 @@ class SPSA(StepwiseOptimizer):
             self._create_iterators(fun=fun, x0=x, n_start=max(iteration - 1, 0), **kwargs)
 
         if self.parameter_dependent_schedules:
-            learn_rate, _ = self._get_parameter_schedule_values()
+            if self._pending_parameter_learning_rates is None:
+                learn_rate, perturbations = self._get_parameter_schedule_values()
+                self._last_parameter_schedule_steps_used = dict(
+                    self._parameter_schedule_steps
+                )
+                self._last_parameter_learning_rates = {
+                    name: float(value)
+                    for name, value in zip(self._active_parameter_names, learn_rate)
+                }
+                self._last_parameter_perturbations = {
+                    name: float(value)
+                    for name, value in zip(
+                        self._active_parameter_names,
+                        perturbations,
+                    )
+                }
+            else:
+                learn_rate = self._pending_parameter_learning_rates
+
+            self._pending_parameter_learning_rates = None
         else:
             learn_rate = next(self.lr_iterator)
         logger.log(VERBOSE_LEVEL, "Learning rate for this iteration is %s", learn_rate)

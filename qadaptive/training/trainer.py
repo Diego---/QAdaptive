@@ -387,6 +387,21 @@ class InnerLoopTrainer:
                     stepsize=step_size,
                     accepted=True,
                     gradient=gradient_estimate,
+                    schedule_steps_used=getattr(
+                        self.optimizer,
+                        "last_parameter_schedule_steps_used",
+                        None,
+                    ),
+                    learning_rates=getattr(
+                        self.optimizer,
+                        "last_parameter_learning_rates",
+                        None,
+                    ),
+                    perturbations=getattr(
+                        self.optimizer,
+                        "last_parameter_perturbations",
+                        None,
+                    ),
                 )
 
                 checker = self.termination_checker

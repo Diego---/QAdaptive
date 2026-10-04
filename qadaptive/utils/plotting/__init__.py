@@ -4,13 +4,21 @@ from .traces import (
 )
 
 from .objective_plots import plot_cost_with_outer_boundaries
-from .parameter_plots import build_parameter_series, plot_parameter_lifelines, plot_parameter_heatmap
+from .parameter_plots import (
+    build_parameter_series,
+    build_parameter_schedule_series,
+    plot_parameter_lifelines,
+    plot_parameter_heatmap,
+    plot_parameter_schedule_history,
+)
 
 __all__ = [
     "TrainingRunTrace",
     "build_training_run_traces",
     "build_parameter_series",
+    "build_parameter_schedule_series",
     "plot_cost_with_outer_boundaries",
     "plot_parameter_lifelines",
     "plot_parameter_heatmap",
+    "plot_parameter_schedule_history",
 ]

@@ -320,3 +320,16 @@ def test_parameter_dependent_step_uses_current_schedule_then_advances(
         "θ_0": 1,
         "θ_1": 4,
     }
+
+    assert optimizer.last_parameter_schedule_steps_used == {
+        "θ_0": 0,
+        "θ_1": 3,
+    }
+    assert optimizer.last_parameter_learning_rates == pytest.approx({
+        "θ_0": 0.8,
+        "θ_1": 0.4,
+    })
+    assert optimizer.last_parameter_perturbations == pytest.approx({
+        "θ_0": 0.2,
+        "θ_1": 0.2 / np.sqrt(2.0),
+    })

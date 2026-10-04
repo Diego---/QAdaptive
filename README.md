@@ -225,6 +225,46 @@ final_params = experiment.get_current_parameter_dict()
 
 The `cx_identity` block becomes the identity at zero rotation angles. Zero initialisation preserves the current circuit's action for such blocks, this property depends on the selected block.
 
+### Parameter-dependent SPSA schedules
+
+For adaptive circuits, SPSA can track the learning-rate and perturbation schedules
+independently for every parameter. Existing parameters keep their accumulated
+schedule age across structural growth, while newly inserted parameters start at
+schedule index zero and therefore receive the initial, larger values of the same
+power-series schedules.
+
+```python
+optimizer = SPSA(
+    resamplings=1,
+    parameter_dependent_schedules=True,
+)
+optimizer.set_power_series_hyperparameters(**spsa_settings)
+
+results = experiment.run_outer_loop(
+    loss_function=vqe_cost,
+    plan_schedule=schedule,
+    train_iterations=TRAIN_ITERATIONS,
+    reuse_parameter_memory=True,
+    restart_parameter_schedules_after_pruning=True,
+)
+```
+
+With `restart_parameter_schedules_after_pruning=True`, a successfully applied
+pruning action restarts the schedules of all surviving parameters before
+retraining. If the pruning proposal is later rejected by the outer acceptance
+rule, the previous per-parameter schedule ages are restored together with the
+previous ansatz.
+
+The recorder stores the schedule values actually used by every accepted
+inner-loop step, so individual parameter lifetimes can be inspected directly:
+
+```python
+recorder.plot_learning_rates(parameters=["θ_0", "θ_3"])
+recorder.plot_perturbations(parameters=["θ_0", "θ_3"])
+```
+
+Parameter-dependent schedules currently support first-order SPSA only.
+
 ## Inspecting results
 
 The following examples continue from the quickstart.

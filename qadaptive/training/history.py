@@ -17,6 +17,9 @@ class IterationRecord:
     stepsize: float
     accepted: bool
     gradient: np.ndarray | None = None
+    schedule_steps_used: dict[str, int] | None = None
+    learning_rates: dict[str, float] | None = None
+    perturbations: dict[str, float] | None = None
     extra_value: float | None = None
     extra_std: float | None = None
 
