@@ -101,6 +101,12 @@ class SPSA(StepwiseOptimizer):
             Optional termination checker.
         """
         super().__init__(callback=callback, termination_checker=termination_checker)
+        
+        if parameter_dependent_schedules and second_order:
+            raise ValueError(
+                "Parameter-dependent schedules are currently supported only for "
+                "first-order SPSA."
+            )
 
         self.maxiter = maxiter
         self.blocking = blocking
@@ -175,6 +181,7 @@ class SPSA(StepwiseOptimizer):
             "learning_rate": learning_rate,
             "perturbation": perturbation,
             "start_point": self.start_point,
+            "parameter_dependent_schedules": self.parameter_dependent_schedules,
             "last_avg": self.last_avg,
             "resamplings": self.resamplings,
             "perturbation_dims": self.perturbation_dims,
@@ -237,6 +244,62 @@ class SPSA(StepwiseOptimizer):
             name: 0
             for name in self._active_parameter_names
         }
+        
+    def _get_parameter_schedule_values(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Return the current learning rate and perturbation for each active parameter.
+
+        Each schedule is evaluated at the parameter's own SPSA schedule step.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            Learning-rate and perturbation vectors ordered according to
+            ``self._active_parameter_names``.
+        """
+        
+        if not self._active_parameter_names:
+            raise RuntimeError(
+                "Parameter-dependent SPSA schedules require active parameter identities."
+            )
+            
+        if set(self._active_parameter_names) != set(self._parameter_schedule_steps):
+            raise RuntimeError(
+                "Active parameter identities and SPSA schedule state are inconsistent."
+            )
+        
+        get_eta, get_eps = _validate_pert_and_learningrate(
+            self.perturbation,
+            self.learning_rate,
+        )
+
+        learning_rates = np.asarray(
+            [
+                next(
+                    get_eta(
+                        n_start=self._parameter_schedule_steps[name]
+                    )
+                )
+                for name in self._active_parameter_names
+            ],
+            dtype=float,
+        )
+
+        perturbations = np.asarray(
+            [
+                next(
+                    get_eps(
+                        n_start=self._parameter_schedule_steps[name]
+                    )
+                )
+                for name in self._active_parameter_names
+            ],
+            dtype=float,
+        )
+
+        return learning_rates, perturbations
 
     def get_support_level(self) -> dict[str, OptimizerSupportLevel]:
         """
@@ -632,7 +695,7 @@ class SPSA(StepwiseOptimizer):
         self,
         loss: Callable[[np.ndarray], float],
         x: np.ndarray,
-        eps: float,
+        eps: float | np.ndarray,
         delta1: np.ndarray,
         delta2: np.ndarray | None = None,
         **kwargs,
@@ -647,7 +710,8 @@ class SPSA(StepwiseOptimizer):
         x : np.ndarray
             Current parameter vector.
         eps : float
-            Perturbation magnitude.
+            Perturbation magnitude. May be a vector containing one perturbation
+            magnitude per parameter.
         delta1 : np.ndarray
             First perturbation direction.
         delta2 : np.ndarray | None, optional
@@ -661,7 +725,12 @@ class SPSA(StepwiseOptimizer):
         points = [x + eps * delta1, x - eps * delta1]
         self._nfev += 2
         
-        logger.info("Perturbation with strength %s in directions %s.", eps, delta1)
+        logger.info(
+            "Perturbation strength%s %s in directions %s.",
+            "s" if self.parameter_dependent_schedules else "",
+            eps, 
+            delta1
+            )
         logger.info("Evaluating with perturbed parameters: %s in this resampling.", points)
 
         if self.second_order:
@@ -695,7 +764,7 @@ class SPSA(StepwiseOptimizer):
         self,
         loss: Callable[[np.ndarray], float],
         x: np.ndarray,
-        eps: float,
+        eps: float | np.ndarray,
         num_samples: int,
         **kwargs,
     ) -> tuple[float, np.ndarray, np.ndarray]:
@@ -709,7 +778,8 @@ class SPSA(StepwiseOptimizer):
         x : np.ndarray
             Current parameter vector.
         eps : float
-            Perturbation magnitude.
+            Perturbation magnitude. May be a vector containing one perturbation
+            magnitude per parameter.
         num_samples : int
             Number of resamplings.
         **kwargs
@@ -811,7 +881,10 @@ class SPSA(StepwiseOptimizer):
         if self.p_iterator is None or self.lr_iterator is None:
             self._create_iterators(fun=loss, x0=x, n_start=max(iteration - 1, 0), **kwargs)
 
-        eps = next(self.p_iterator)
+        if self.parameter_dependent_schedules:
+            _, eps = self._get_parameter_schedule_values()
+        else:
+            eps = next(self.p_iterator)
         fx_estimate, gradient, hessian = self._point_estimate(
             loss,
             np.asarray(x, dtype=float),
@@ -891,7 +964,10 @@ class SPSA(StepwiseOptimizer):
         if self.lr_iterator is None:
             self._create_iterators(fun=fun, x0=x, n_start=max(iteration - 1, 0), **kwargs)
 
-        learn_rate = next(self.lr_iterator)
+        if self.parameter_dependent_schedules:
+            learn_rate, _ = self._get_parameter_schedule_values()
+        else:
+            learn_rate = next(self.lr_iterator)
         logger.log(VERBOSE_LEVEL, "Learning rate for this iteration is %s", learn_rate)
         
         update = grad * learn_rate
