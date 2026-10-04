@@ -233,6 +233,31 @@ class SPSA(StepwiseOptimizer):
         """Advance the SPSA schedule of every currently active parameter by one step."""
         for name in self._active_parameter_names:
             self._parameter_schedule_steps[name] += 1
+            
+    def restore_parameter_schedules(
+        self,
+        schedule_steps: dict[str, int],
+    ) -> None:
+        """
+        Restore per-parameter SPSA schedule state.
+
+        Parameters
+        ----------
+        schedule_steps : dict[str, int]
+            Mapping from active parameter names to the number of SPSA schedule
+            steps already consumed by each parameter.
+        """
+        if not self.parameter_dependent_schedules:
+            raise RuntimeError(
+                "Cannot restore parameter schedules when "
+                "parameter_dependent_schedules=False."
+            )
+
+        if any(step < 0 for step in schedule_steps.values()):
+            raise ValueError("Parameter schedule steps must be non-negative.")
+
+        self._parameter_schedule_steps = dict(schedule_steps)
+        self._active_parameter_names = tuple(schedule_steps)
         
     def restart_parameter_schedules(self) -> None:
         """

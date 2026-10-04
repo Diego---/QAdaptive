@@ -157,6 +157,9 @@ class ExperimentSnapshot:
         Most recent accepted parameter vector recorded by the trainer.
     outer_iteration : int
         Outer-loop iteration counter at the time of the snapshot.
+    parameter_schedule_steps : dict[str, int] | None
+        Per-parameter optimizer schedule state when supported by the active
+        optimizer. None for optimizers without parameter-dependent schedules.
     """
 
     ansatz: QuantumCircuit
@@ -167,6 +170,7 @@ class ExperimentSnapshot:
     last_cost: float
     last_params: np.ndarray
     outer_iteration: int
+    parameter_schedule_steps: dict[str, int] | None = None
 
 @dataclass
 class ActionSpec:

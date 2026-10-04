@@ -1705,6 +1705,14 @@ class MutableAnsatzExperiment:
         - the trainer's last accepted cost and parameter vector,
         - the outer-loop iteration counter.
         """
+        
+        optimizer = self.trainer.optimizer
+
+        if getattr(optimizer, "parameter_dependent_schedules", False):
+            parameter_schedule_steps = optimizer.parameter_schedule_steps
+        else:
+            parameter_schedule_steps = None
+        
         return ExperimentSnapshot(
             ansatz=self.adaptive_ansatz.get_current_ansatz().copy(),
             locked_gates=set(self.locked_gates),
@@ -1723,6 +1731,7 @@ class MutableAnsatzExperiment:
             last_cost=float(self.last_cost),
             last_params=np.asarray(self.last_params, dtype=float).copy(),
             outer_iteration=self._outer_iteration,
+            parameter_schedule_steps=parameter_schedule_steps,
         )
 
 
@@ -1746,6 +1755,21 @@ class MutableAnsatzExperiment:
         """
         self.adaptive_ansatz.update_ansatz(snapshot.ansatz.copy())
         self._sync_after_ansatz_change()
+        
+        if snapshot.parameter_schedule_steps is not None:
+            restore_schedules = getattr(
+                self.trainer.optimizer,
+                "restore_parameter_schedules",
+                None,
+            )
+
+            if restore_schedules is None:
+                raise RuntimeError(
+                    "Snapshot contains parameter schedule state, but the current "
+                    "optimizer cannot restore it."
+                )
+
+            restore_schedules(snapshot.parameter_schedule_steps)
 
         self.locked_gates = set(snapshot.locked_gates)
         self._2qbg_positions = dict(snapshot.two_q_map)

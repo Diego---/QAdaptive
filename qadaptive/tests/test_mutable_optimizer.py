@@ -1,5 +1,7 @@
 import pytest
 
+import numpy as np
+
 from qiskit.circuit import QuantumCircuit, ParameterVector
 
 from qadaptive.training import SPSA
@@ -217,3 +219,48 @@ def test_remove_at_locked_two_qubit_gate_does_nothing():
 
     assert len(mo.ansatz.data) == original_len
     assert mo.locked_gates == original_locked
+
+def test_restore_parameter_schedules_restores_steps_and_active_parameters():
+    
+    def quadratic(x, ansatz=None):
+        x = np.asarray(x, dtype=float)
+        return float(np.sum(x**2))
+    
+    optimizer = SPSA(
+        learning_rate=0.1,
+        perturbation=0.1,
+        parameter_dependent_schedules=True,
+    )
+
+    optimizer.initialize(
+        np.zeros(2),
+        quadratic,
+        parameter_names=["θ_0", "θ_1"],
+    )
+
+    optimizer._parameter_schedule_steps = {
+        "θ_0": 12,
+        "θ_1": 7,
+    }
+
+    snapshot = optimizer.parameter_schedule_steps
+
+    optimizer.initialize(
+        np.zeros(3),
+        quadratic,
+        parameter_names=["θ_0", "θ_1", "θ_2"],
+    )
+
+    optimizer._advance_parameter_schedule_steps()
+
+    optimizer.restore_parameter_schedules(snapshot)
+
+    assert optimizer.parameter_schedule_steps == {
+        "θ_0": 12,
+        "θ_1": 7,
+    }
+
+    assert optimizer._active_parameter_names == (
+        "θ_0",
+        "θ_1",
+    )
