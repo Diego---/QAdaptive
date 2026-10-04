@@ -709,7 +709,7 @@ class SPSA(StepwiseOptimizer):
             Loss function.
         x : np.ndarray
             Current parameter vector.
-        eps : float
+        eps : float | np.ndarray
             Perturbation magnitude. May be a vector containing one perturbation
             magnitude per parameter.
         delta1 : np.ndarray
@@ -777,7 +777,7 @@ class SPSA(StepwiseOptimizer):
             Loss function.
         x : np.ndarray
             Current parameter vector.
-        eps : float
+        eps : float | np.ndarray
             Perturbation magnitude. May be a vector containing one perturbation
             magnitude per parameter.
         num_samples : int
