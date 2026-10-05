@@ -268,6 +268,7 @@ a_i(n_i, K_i)
 \frac{a}{(K_i + 1)^{\beta_a}}
 \frac{1}{(n_i + 1 + A)^\alpha},
 $$
+
 $$
 c_i(n_i, K_i)
 =
@@ -278,7 +279,7 @@ $$
 Configure the birth modulation independently for the learning-rate and
 perturbation schedules:
 
-```
+```python
 optimizer.set_parameter_birth_power_series(
     learning_rate_exponent=0.5,
     perturbation_exponent=0.25,
@@ -302,7 +303,7 @@ surviving parameter values are unchanged. The outer loop can therefore
 optionally restart the schedules of all surviving parameters after a
 successfully applied pruning action:
 
-```
+```python
 results = experiment.run_outer_loop(
     loss_function=vqe_cost,
     plan_schedule=schedule,
