@@ -253,7 +253,7 @@ a_i\left(n_i\right)=\frac{a}{\left(n_i+1+A\right)^\alpha}, \quad c_i\left(n_i\ri
 $$
 
 each parameter therefore evolves according to its own optimization age
-\(n_i\).
+$n_i$.
 
 ### Modulating parameter birth strength
 
@@ -263,17 +263,11 @@ learning rate and perturbation strength according to the outer-loop iteration
 $K_i$ at which a parameter was introduced:
 
 $$
-a_i(n_i, K_i)
-=
-\frac{a}{(K_i + 1)^{\beta_a}}
-\frac{1}{(n_i + 1 + A)^\alpha},
+a_i(n_i, K_i)=\frac{a}{(K_i + 1)^{\beta_a}}\frac{1}{(n_i + 1 + A)^\alpha},
 $$
 
 $$
-c_i(n_i, K_i)
-=
-\frac{c}{(K_i + 1)^{\beta_c}}
-\frac{1}{(n_i + 1)^\gamma}.
+c_i(n_i, K_i)=\frac{c}{(K_i + 1)^{\beta_c}}\frac{1}{(n_i + 1)^\gamma}.
 $$
 
 Configure the birth modulation independently for the learning-rate and
