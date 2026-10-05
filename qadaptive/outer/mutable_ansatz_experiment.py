@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 
-from typing import Callable
+from typing import Callable, Sequence
 from pathlib import Path
 
 from qiskit.circuit import QuantumCircuit, Parameter
@@ -780,6 +780,7 @@ class MutableAnsatzExperiment:
         trainer_iteration_reset: int | None = None,
         outer_iteration: int | None = None,
         action: str | None = None,
+        restart_parameter_schedules: bool = False,
         note: str | None = None,
         **kwargs
         ) -> OptimizerResult:
@@ -806,6 +807,9 @@ class MutableAnsatzExperiment:
             Outer-loop iteration associated with this training run.
         action : str | None, optional
             Structural action associated with this training run.
+        restart_parameter_schedules : bool, optional
+            If `True`, restart the optimizer's per-parameter schedules before training
+            begins. Defaults to `False`.
         note : str | None, optional
             Optional annotation stored with this training run.
         **kwargs
@@ -839,6 +843,7 @@ class MutableAnsatzExperiment:
             iteration_start=trainer_iteration_reset,
             outer_iteration=outer_iteration,
             action=action,
+            restart_parameter_schedules=restart_parameter_schedules,
             note=note,
             **kwargs,
         )
@@ -876,6 +881,7 @@ class MutableAnsatzExperiment:
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
         record_parameter_memory: bool = True,
+        restart_parameter_schedules_after_pruning: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         metropolis_temperature: float | None = None,
@@ -916,6 +922,10 @@ class MutableAnsatzExperiment:
             Default value for parameters not yet present in `parameter_memory`.
         record_parameter_memory : bool, optional
             Whether to append a parameter-memory record for this attempted step.
+        restart_parameter_schedules_after_pruning : bool, optional
+            If True, restart the optimizer's per-parameter schedules before retraining
+            when a pruning action is successfully applied. A skipped pruning action does
+            not trigger a restart. Defaults to False.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -974,7 +984,26 @@ class MutableAnsatzExperiment:
         )
 
         # Execute the structural change proposal.
-        self.execute_action_plan(plan, cost=loss_function)
+        action_results = self.execute_action_plan(
+            plan,
+            cost=loss_function,
+        )
+
+        pruning_applied = any(
+            spec.action == PRUNE_TWO_QUBIT and result is True
+            for spec, result in zip(plan.actions, action_results)
+        )
+
+        restart_parameter_schedules = (
+            restart_parameter_schedules_after_pruning
+            and pruning_applied
+        )
+
+        if restart_parameter_schedules:
+            logger.info(
+                "A pruning action was applied; parameter-dependent SPSA "
+                "schedules will restart before retraining."
+            )
 
         train_result: OptimizerResult | None = None
         training_run = None
@@ -1021,6 +1050,7 @@ class MutableAnsatzExperiment:
                 trainer_iteration_reset=trainer_iteration_reset,
                 outer_iteration=self._outer_iteration,
                 action=plan.display_name,
+                restart_parameter_schedules=restart_parameter_schedules,
                 **train_kwargs,
             )
             training_run = self.trainer.recorder.last_run
@@ -1205,6 +1235,7 @@ class MutableAnsatzExperiment:
         reuse_parameter_memory: bool = False,
         default_value_for_new_params: float = 0.0,
         record_parameter_memory: bool = True,
+        restart_parameter_schedules_after_pruning: bool = False,
         accept_tol: float = 0.0,
         complexity_penalty: Callable[[QuantumCircuit], float] | None = None,
         metropolis_temperature: float | None = None,
@@ -1266,6 +1297,10 @@ class MutableAnsatzExperiment:
             Default value assigned to newly introduced parameters when warm-starting.
         record_parameter_memory : bool, optional
             Whether to append parameter-memory records for each attempted outer step.
+        restart_parameter_schedules_after_pruning : bool, optional
+            If True, restart the optimizer's per-parameter schedules before retraining
+            whenever a pruning action is successfully applied. Skipped pruning actions
+            do not trigger a restart. Defaults to False.
         accept_tol : float, optional
             Required score improvement threshold for generic outer acceptance.
         complexity_penalty : Callable[[QuantumCircuit], float] | None, optional
@@ -1453,6 +1488,7 @@ class MutableAnsatzExperiment:
                     reuse_parameter_memory=reuse_parameter_memory,
                     default_value_for_new_params=default_value_for_new_params,
                     record_parameter_memory=record_parameter_memory,
+                    restart_parameter_schedules_after_pruning=restart_parameter_schedules_after_pruning,
                     accept_tol=accept_tol,
                     complexity_penalty=complexity_penalty,
                     metropolis_temperature=metropolis_temperature,
@@ -1580,8 +1616,16 @@ class MutableAnsatzExperiment:
             reset_locks_on_ambiguity=kwargs.get("reset_locks_on_ambiguity", True),
         )
 
-    def _action_prune_two_qubit(self, **kwargs) -> None:
-        """Apply one structural two-qubit pruning proposal."""
+    def _action_prune_two_qubit(self, **kwargs) -> bool:
+        """
+        Apply one structural two-qubit pruning proposal.
+
+        Returns
+        -------
+        bool
+            True if a pruning proposal was successfully applied, False if the
+            requested pruning target no longer exists or no proposal could be applied.
+        """
         gate_to_remove = kwargs.get("gate_to_remove")
 
         if gate_to_remove is None and "target_occurrence" in kwargs and "target_pair" in kwargs:
@@ -1600,15 +1644,17 @@ class MutableAnsatzExperiment:
                 kwargs.get("target_pair"),
                 kwargs.get("target_occurrence"),
             )
-            return
+            return False
 
-        self.apply_two_qubit_pruning_proposal(gate_to_remove=gate_to_remove)
+        return self.apply_two_qubit_pruning_proposal(
+            gate_to_remove=gate_to_remove
+        )
         
     def _apply_action(
         self,
         spec: ActionSpec,
         cost: Callable[[np.ndarray, QuantumCircuit], float] | None = None,
-    ) -> None:
+    ) -> bool | None:
         """
         Apply one validated atomic action.
 
@@ -1623,8 +1669,13 @@ class MutableAnsatzExperiment:
             - ``"simplify"``
             - ``"prune_two_qubit"``
         cost : Callable[[np.ndarray, QuantumCircuit], float] | None, optional
-            Objective function required by actions that internally evaluate the
-            ansatz, currently ``"prune_two_qubit"``.
+            Objective function supplied to actions that require objective evaluation.
+            
+        Returns
+        -------
+        bool | None
+            Return value of the executed action handler. Most actions return None;
+            pruning actions return whether pruning was successfully applied.
 
         Raises
         ------
@@ -1644,15 +1695,15 @@ class MutableAnsatzExperiment:
                 raise ValueError(
                     f"Action '{spec.action}' requires a cost callable."
                 )
-            registry[spec.action](cost=cost, **spec.kwargs)
-        else:
-            registry[spec.action](**spec.kwargs)
+            return registry[spec.action](cost=cost, **spec.kwargs)
+            
+        return registry[spec.action](**spec.kwargs)
         
     def execute_action_plan(
         self,
         plan: OuterStepPlan,
         cost: Callable[[np.ndarray, QuantumCircuit], float] | None = None,
-    ) -> None:
+    ) -> list[bool | None]:
         """
         Execute all atomic actions contained in an outer-step plan.
         
@@ -1662,21 +1713,34 @@ class MutableAnsatzExperiment:
             Structured plan containing a sequence of atomic actions to apply to the
             current ansatz.
         cost : Callable[[np.ndarray, QuantumCircuit], float] | None, optional
-            Objective function required by actions that internally evaluate the
-            ansatz, currently ``"prune_two_qubit"``.
+            Objective function supplied to actions that require objective evaluation.
+            
+        Returns
+        -------
+        list[bool | None]
+            Return values of the executed action handlers, in plan order. Most actions
+            return None; pruning actions return True when pruning was successfully
+            applied and False when it was skipped.
         
         Raises
         ------
         ValueError
             If any action in the plan is unknown or if a required argument is missing.
         """
+        results = []
+
         for i, spec in enumerate(plan.actions):
             logger.info(
                 "Executing action %s/%s.",
                 i + 1,
                 len(plan.actions),
             )
-            self._apply_action(spec, cost=cost)
+
+            results.append(
+                self._apply_action(spec, cost=cost)
+            )
+
+        return results
     
     def _snapshot_state(self) -> ExperimentSnapshot:
         """
@@ -1704,7 +1768,21 @@ class MutableAnsatzExperiment:
         - parameter-memory history,
         - the trainer's last accepted cost and parameter vector,
         - the outer-loop iteration counter.
+        - per-parameter optimizer schedule steps,
+        - per-parameter birth outer iterations,
         """
+        
+        optimizer = self.trainer.optimizer
+
+        if getattr(optimizer, "parameter_dependent_schedules", False):
+            parameter_schedule_steps = optimizer.parameter_schedule_steps
+            parameter_birth_outer_iterations = (
+                optimizer.parameter_birth_outer_iterations
+            )
+        else:
+            parameter_schedule_steps = None
+            parameter_birth_outer_iterations = None
+        
         return ExperimentSnapshot(
             ansatz=self.adaptive_ansatz.get_current_ansatz().copy(),
             locked_gates=set(self.locked_gates),
@@ -1723,6 +1801,8 @@ class MutableAnsatzExperiment:
             last_cost=float(self.last_cost),
             last_params=np.asarray(self.last_params, dtype=float).copy(),
             outer_iteration=self._outer_iteration,
+            parameter_schedule_steps=parameter_schedule_steps,
+            parameter_birth_outer_iterations=parameter_birth_outer_iterations,
         )
 
 
@@ -1746,6 +1826,26 @@ class MutableAnsatzExperiment:
         """
         self.adaptive_ansatz.update_ansatz(snapshot.ansatz.copy())
         self._sync_after_ansatz_change()
+        
+        if snapshot.parameter_schedule_steps is not None:
+            restore_schedules = getattr(
+                self.trainer.optimizer,
+                "restore_parameter_schedules",
+                None,
+            )
+
+            if restore_schedules is None:
+                raise RuntimeError(
+                    "Snapshot contains parameter schedule state, but the current "
+                    "optimizer cannot restore it."
+                )
+
+            restore_schedules(
+                snapshot.parameter_schedule_steps,
+                birth_outer_iterations=(
+                    snapshot.parameter_birth_outer_iterations
+                ),
+            )
 
         self.locked_gates = set(snapshot.locked_gates)
         self._2qbg_positions = dict(snapshot.two_q_map)
@@ -2184,7 +2284,13 @@ class MutableAnsatzExperiment:
 
         return plot_outer_history(self.outer_step_history, **kwargs)
     
-    def plot_architecture_evolution(self, *, indices=None, figsize=None):
+    def plot_architecture_evolution(
+        self, 
+        *, 
+        indices: Sequence[int] | None = None, 
+        figsize: tuple[float, float] | None = None, 
+        fold: int =-1
+        ):
         """
         Draw selected accepted architecture snapshots.
 
@@ -2200,6 +2306,12 @@ class MutableAnsatzExperiment:
         figsize : tuple[float, float] | None, optional
             Overall figure size as ``(width, height)``. If None, height is computed
             dynamically based on qubit counts across selected circuits. Default is None.
+        fold : int, optional
+            Sets pagination. It can be disabled using -1. In text, sets the length of the lines. 
+            This is useful when the drawing does not fit in the console. If None (default), it 
+            will try to guess the console width using shutil.get_terminal_size(). However, if 
+            running in jupyter, the default line length is set to 80 characters. In mpl, it is 
+            the number of (visual) layers before folding. Default is 25.
 
         Returns
         -------
@@ -2214,6 +2326,7 @@ class MutableAnsatzExperiment:
             self.accepted_ansatz_history,
             indices=indices,
             figsize=figsize,
+            fold=fold,
         )
         
     def plot_complexity_evolution(self, **kwargs):

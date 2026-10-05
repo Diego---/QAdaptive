@@ -225,6 +225,108 @@ final_params = experiment.get_current_parameter_dict()
 
 The `cx_identity` block becomes the identity at zero rotation angles. Zero initialisation preserves the current circuit's action for such blocks, this property depends on the selected block.
 
+### Parameter-dependent SPSA schedules
+
+Standard SPSA uses a single learning-rate and perturbation schedule for the
+complete parameter vector. In an adaptive circuit, however, parameters can be
+introduced at very different stages of the optimization. A newly inserted
+parameter would otherwise inherit the already-decayed global schedule and may
+therefore receive only very small updates.
+
+QAdaptive can instead track the SPSA schedule age independently for every
+parameter:
+
+```python
+optimizer = SPSA(
+    resamplings=1,
+    parameter_dependent_schedules=True,
+)
+optimizer.set_power_series_hyperparameters(**spsa_settings)
+```
+
+Existing parameters retain their accumulated schedule age across structural
+growth, while newly introduced parameters start at schedule index zero. For
+the usual SPSA power-series schedules
+
+$$
+a_i\left(n_i\right)=\frac{a}{\left(n_i+1+A\right)^\alpha}, \quad c_i\left(n_i\right)=\frac{c}{\left(n_i+1\right)^\gamma},
+$$
+
+each parameter therefore evolves according to its own optimization age
+$n_i$.
+
+### Modulating parameter birth strength
+
+A fresh schedule does not necessarily need to restart at full strength late in
+an adaptive optimization. QAdaptive can additionally modulate the initial
+learning rate and perturbation strength according to the outer-loop iteration
+$K_i$ at which a parameter was introduced:
+
+$$
+a_i(n_i, K_i)=\frac{a}{(K_i + 1)^{\beta_a}}\frac{1}{(n_i + 1 + A)^\alpha},
+$$
+
+$$
+c_i(n_i, K_i)=\frac{c}{(K_i + 1)^{\beta_c}}\frac{1}{(n_i + 1)^\gamma}.
+$$
+
+Configure the birth modulation independently for the learning-rate and
+perturbation schedules:
+
+```python
+optimizer.set_parameter_birth_power_series(
+    learning_rate_exponent=0.5,
+    perturbation_exponent=0.25,
+)
+```
+
+The birth exponents control how strongly later parameters are initialized:
+- exponent = 0.0 disables birth-strength modulation and gives every new
+  parameter the same fresh schedule;
+- positive exponents make later-born parameters start more conservatively;
+- negative exponents make later-born parameters start more aggressively.
+
+The parameter's birth iteration is retained throughout its lifetime. Restarting
+a schedule resets its optimization age but does not change when the parameter
+was introduced.
+
+#### Restarting schedules after pruning
+
+Pruning can substantially change the represented unitary even when the
+surviving parameter values are unchanged. The outer loop can therefore
+optionally restart the schedules of all surviving parameters after a
+successfully applied pruning action:
+
+```python
+results = experiment.run_outer_loop(
+    loss_function=vqe_cost,
+    plan_schedule=schedule,
+    train_iterations=TRAIN_ITERATIONS,
+    reuse_parameter_memory=True,
+    restart_parameter_schedules_after_pruning=True,
+)
+```
+
+If the pruning proposal is later rejected by the outer acceptance rule, both
+the previous per-parameter schedule ages and parameter-birth metadata are
+restored together with the previous ansatz.
+
+The recorder stores the learning rate and perturbation strength actually used
+for every parameter at every recorded optimizer step:
+
+```python
+recorder.plot_learning_rates(parameters=["θ_0", "θ_3"])
+recorder.plot_perturbations(parameters=["θ_0", "θ_3"])
+```
+
+The optimizer also exposes the current parameter birth iterations:
+
+```python
+optimizer.parameter_birth_outer_iterations
+```
+
+Parameter-dependent schedules currently support first-order SPSA only.
+
 ## Inspecting results
 
 The following examples continue from the quickstart.

@@ -630,7 +630,7 @@ def build_least_used_pair_growth_plan(
 def build_single_qubit_block_plan(
     experiment: MutableAnsatzExperiment,
     block_name: str = "rz_rx_rz",
-    qubits: list[int] | None = None,
+    qubit_selection: list[int] | Callable[[MutableAnsatzExperiment], list[int]]  = None,
     insert_index_policy: Callable | None = None,
     num_insertions: int = 1,
     force_accept: bool = False,
@@ -650,8 +650,10 @@ def build_single_qubit_block_plan(
         Experiment instance used to access the experiment state.
     block_name : str, optional
          Name of the block to insert for each selected qubit.
-    qubits : list[int] | None, optional
-        List of target qubits for block insertion. If None, blocks are inserted on all qubits.
+    qubit_selection : list[int] | Callable[[MutableAnsatzExperiment], list[int]] | None
+         Target qubits for block insertion, or a callable with signature
+        ``(experiment) -> list[int]`` that selects target qubits from the
+        current experiment state. If None, all qubits are selected.
     insert_index_policy : Callable | None, optional
         Function that determines the circuit-data index for each insertion.
         It should have the signature ``(experiment, target_qubits, insertion_number) -> int``. 
@@ -680,8 +682,12 @@ def build_single_qubit_block_plan(
     """
     num_qubits = experiment.ansatz.num_qubits
 
-    if qubits is None:
+    if qubit_selection is None:
         qubits = list(range(num_qubits))
+    elif callable(qubit_selection):
+        qubits = list(qubit_selection(experiment))
+    else:
+        qubits = list(qubit_selection)
 
     if insert_index_policy is None:
         insert_index_policy = default_append_index_policy

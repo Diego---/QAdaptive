@@ -9,3 +9,11 @@ QAE.code-workspace
 !examples/*.ipynb
 .ipynb_checkpoints/
 /.vscode
+/examples/results/
+/examples/logs/
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.lcov

@@ -262,3 +262,102 @@ def plot_parameter_heatmap(
     fig.colorbar(im, ax=ax, label="Normalized value" if normalize else "Parameter value")
 
     return fig, ax
+
+
+
+def build_parameter_schedule_series(
+    runs,
+    attribute: str,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Build per-parameter optimizer-diagnostic traces across training runs."""
+    allowed = {"learning_rates", "perturbations", "schedule_steps_used"}
+    if attribute not in allowed:
+        raise ValueError(
+            f"Unsupported parameter schedule attribute {attribute!r}. "
+            f"Expected one of {sorted(allowed)}."
+        )
+
+    xs: dict[str, list[float]] = defaultdict(list)
+    ys: dict[str, list[float]] = defaultdict(list)
+    global_step = 0
+
+    for run in runs:
+        for iteration in run.iterations:
+            values = getattr(iteration, attribute, None)
+            if values is not None:
+                for name, value in values.items():
+                    xs[name].append(float(global_step))
+                    ys[name].append(float(value))
+            global_step += 1
+
+        for name in list(xs):
+            xs[name].append(np.nan)
+            ys[name].append(np.nan)
+
+    return {
+        name: (np.asarray(xs[name], dtype=float), np.asarray(ys[name], dtype=float))
+        for name in sorted(xs, key=_parameter_sort_key)
+    }
+
+
+def plot_parameter_schedule_history(
+    runs,
+    attribute: str,
+    parameters: list[str] | None = None,
+    figsize: tuple[int, int] = (12, 6),
+    linewidth: float = 1.5,
+    legend_outside: bool = True,
+    show_legend: bool = True,
+    ylabel: str | None = None,
+    title: str | None = None,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot one recorded per-parameter optimizer diagnostic."""
+    if len(runs) == 0:
+        raise ValueError("runs must contain at least one training run.")
+
+    series = build_parameter_schedule_series(runs, attribute)
+    if not series:
+        raise ValueError(
+            f"No recorded {attribute!r} diagnostics are available. "
+            "Use SPSA with parameter_dependent_schedules=True."
+        )
+
+    if parameters is None:
+        selected = list(series)
+    else:
+        selected = [name for name in parameters if name in series]
+
+    if not selected:
+        raise ValueError("None of the requested parameters have recorded diagnostics.")
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for name in selected:
+        x, y = series[name]
+        ax.plot(x, y, linewidth=linewidth, label=name)
+
+    cumulative = 0
+    for run in runs[:-1]:
+        cumulative += len(run.iterations)
+        if cumulative > 0:
+            ax.axvline(cumulative - 0.5, linestyle="--", linewidth=1)
+
+    ax.set_xlabel("Global recorded inner-loop step")
+    ax.set_ylabel(attribute.replace("_", " ") if ylabel is None else ylabel)
+    if title is not None:
+        ax.set_title(title)
+
+    if show_legend:
+        if legend_outside:
+            ax.legend(
+                loc="upper left",
+                bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0,
+                fontsize=8,
+                ncol=1,
+            )
+            fig.subplots_adjust(right=0.72)
+        else:
+            ax.legend(ncol=2, fontsize=8)
+
+    return fig, ax

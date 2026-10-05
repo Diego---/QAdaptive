@@ -239,6 +239,7 @@ class InnerLoopTrainer:
         initial_value: float | None = None,
         outer_iteration: int | None = None,
         action: str | None = None,
+        restart_parameter_schedules: bool = False,
         note: str | None = None,
         **kwargs,
     ) -> OptimizerResult:
@@ -271,6 +272,9 @@ class InnerLoopTrainer:
             Outer-loop iteration associated with this training run.
         action : str | None, optional
             Structural action associated with this training run.
+        restart_parameter_schedules : bool, optional
+            If True, restart the optimizer's per-parameter schedules after optimizer
+            initialization and before the first training step. Defaults to False.
         note : str | None, optional
             Optional run annotation.
         **kwargs
@@ -326,8 +330,36 @@ class InnerLoopTrainer:
                 x,
                 loss_function,
                 iteration_start=iteration_start,
+                parameter_names=param_names,
+                outer_iteration=outer_iteration,
                 **loss_kwargs,
             )
+            
+            birth_outer_iterations = getattr(
+                self.optimizer,
+                "parameter_birth_outer_iterations",
+                None,
+            )
+
+            if birth_outer_iterations:
+                self.recorder.set_parameter_birth_outer_iterations(
+                    birth_outer_iterations
+                )
+            
+            if restart_parameter_schedules:
+                restart_schedules = getattr(
+                    self.optimizer,
+                    "restart_parameter_schedules",
+                    None,
+                )
+
+                if restart_schedules is None:
+                    raise RuntimeError(
+                        "Parameter schedule restart was requested, but the active "
+                        "optimizer does not support parameter-dependent schedules."
+                    )
+
+                restart_schedules()
 
             while k < iterations:
                 k += 1
@@ -367,6 +399,21 @@ class InnerLoopTrainer:
                     stepsize=step_size,
                     accepted=True,
                     gradient=gradient_estimate,
+                    schedule_steps_used=getattr(
+                        self.optimizer,
+                        "last_parameter_schedule_steps_used",
+                        None,
+                    ),
+                    learning_rates=getattr(
+                        self.optimizer,
+                        "last_parameter_learning_rates",
+                        None,
+                    ),
+                    perturbations=getattr(
+                        self.optimizer,
+                        "last_parameter_perturbations",
+                        None,
+                    ),
                 )
 
                 checker = self.termination_checker

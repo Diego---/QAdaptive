@@ -119,3 +119,71 @@ def test_recorder_retains_partial_run_after_abort():
     assert recorder.active_run is None
     assert len(recorder.runs) == 1
     assert recorder.last_run.note == "hardware interruption"
+
+
+
+def test_recorder_records_serializes_and_plots_parameter_schedules():
+    recorder = InnerLoopRecorder()
+    recorder.start_run(
+        param_names=["θ_0", "θ_1"],
+        initial_point=[0.0, 0.0],
+    )
+    
+    recorder.set_parameter_birth_outer_iterations(
+        {
+            "θ_0": 0,
+            "θ_1": 3,
+        }
+    )
+
+    recorder(
+        iteration=1,
+        nfev=2,
+        params=[0.1, -0.1],
+        value=0.5,
+        stepsize=0.1,
+        accepted=True,
+        schedule_steps_used={"θ_0": 0, "θ_1": 3},
+        learning_rates={"θ_0": 0.8, "θ_1": 0.4},
+        perturbations={"θ_0": 0.2, "θ_1": 0.1},
+    )
+    recorder(
+        iteration=2,
+        nfev=4,
+        params=[0.2, -0.2],
+        value=0.4,
+        stepsize=0.1,
+        accepted=True,
+        schedule_steps_used={"θ_0": 1, "θ_1": 4},
+        learning_rates={"θ_0": 0.6, "θ_1": 0.3},
+        perturbations={"θ_0": 0.18, "θ_1": 0.09},
+    )
+    recorder.finish_run(final_params=[0.2, -0.2], final_value=0.4)
+
+    payload = recorder.to_dict()
+    first = payload["runs"][0]["iterations"][0]
+    assert first["schedule_steps_used"] == {"θ_0": 0, "θ_1": 3}
+    assert first["learning_rates"] == {"θ_0": 0.8, "θ_1": 0.4}
+    assert first["perturbations"] == {"θ_0": 0.2, "θ_1": 0.1}
+    assert payload["runs"][0]["parameter_birth_outer_iterations"] == {
+        "θ_0": 0,
+        "θ_1": 3,
+    }
+
+    lr_figure, lr_axes = recorder.plot_learning_rates(parameters=["θ_1"])
+    c_figure, c_axes = recorder.plot_perturbations(parameters=["θ_0"])
+
+    lr_line = next(line for line in lr_axes.lines if line.get_label() == "θ_1")
+    c_line = next(line for line in c_axes.lines if line.get_label() == "θ_0")
+
+    np.testing.assert_allclose(
+        lr_line.get_ydata()[np.isfinite(lr_line.get_ydata())],
+        [0.4, 0.3],
+    )
+    np.testing.assert_allclose(
+        c_line.get_ydata()[np.isfinite(c_line.get_ydata())],
+        [0.2, 0.18],
+    )
+
+    assert lr_figure is not None
+    assert c_figure is not None
