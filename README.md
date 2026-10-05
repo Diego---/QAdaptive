@@ -307,7 +307,7 @@ results = experiment.run_outer_loop(
 )
 ```
 
-WIf the pruning proposal is later rejected by the outer acceptance rule, both
+If the pruning proposal is later rejected by the outer acceptance rule, both
 the previous per-parameter schedule ages and parameter-birth metadata are
 restored together with the previous ansatz.
 
