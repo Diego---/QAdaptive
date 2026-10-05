@@ -1774,8 +1774,12 @@ class MutableAnsatzExperiment:
 
         if getattr(optimizer, "parameter_dependent_schedules", False):
             parameter_schedule_steps = optimizer.parameter_schedule_steps
+            parameter_birth_outer_iterations = (
+                optimizer.parameter_birth_outer_iterations
+            )
         else:
             parameter_schedule_steps = None
+            parameter_birth_outer_iterations = None
         
         return ExperimentSnapshot(
             ansatz=self.adaptive_ansatz.get_current_ansatz().copy(),
@@ -1796,6 +1800,7 @@ class MutableAnsatzExperiment:
             last_params=np.asarray(self.last_params, dtype=float).copy(),
             outer_iteration=self._outer_iteration,
             parameter_schedule_steps=parameter_schedule_steps,
+            parameter_birth_outer_iterations=parameter_birth_outer_iterations,
         )
 
 
@@ -1833,7 +1838,12 @@ class MutableAnsatzExperiment:
                     "optimizer cannot restore it."
                 )
 
-            restore_schedules(snapshot.parameter_schedule_steps)
+            restore_schedules(
+                snapshot.parameter_schedule_steps,
+                birth_outer_iterations=(
+                    snapshot.parameter_birth_outer_iterations
+                ),
+            )
 
         self.locked_gates = set(snapshot.locked_gates)
         self._2qbg_positions = dict(snapshot.two_q_map)

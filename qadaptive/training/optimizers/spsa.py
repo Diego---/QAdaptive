@@ -307,6 +307,7 @@ class SPSA(StepwiseOptimizer):
     def restore_parameter_schedules(
         self,
         schedule_steps: dict[str, int],
+        birth_outer_iterations: dict[str, int] | None = None,
     ) -> None:
         """
         Restore per-parameter SPSA schedule state.
@@ -316,6 +317,9 @@ class SPSA(StepwiseOptimizer):
         schedule_steps : dict[str, int]
             Mapping from active parameter names to the number of SPSA schedule
             steps already consumed by each parameter.
+        birth_outer_iterations : dict[str, int] | None, optional
+            Mapping from active parameter names to the outer-loop iteration
+            at which each parameter was first introduced.
         """
         if not self.parameter_dependent_schedules:
             raise RuntimeError(
@@ -326,7 +330,38 @@ class SPSA(StepwiseOptimizer):
         if any(step < 0 for step in schedule_steps.values()):
             raise ValueError("Parameter schedule steps must be non-negative.")
 
+        if birth_outer_iterations is None:
+            missing = (
+                set(schedule_steps)
+                - set(self._parameter_birth_outer_iterations)
+            )
+
+            if missing:
+                raise ValueError(
+                    "Cannot restore parameter schedules because birth metadata "
+                    f"is missing for parameters: {sorted(missing)}."
+                )
+
+            birth_outer_iterations = {
+                name: self._parameter_birth_outer_iterations[name]
+                for name in schedule_steps
+            }
+
+        if set(schedule_steps) != set(birth_outer_iterations):
+            raise ValueError(
+                "Schedule-step state and birth-iteration state must contain "
+                "the same parameter names."
+            )
+
+        if any(iteration < 0 for iteration in birth_outer_iterations.values()):
+            raise ValueError(
+                "Parameter birth outer iterations must be non-negative."
+            )
+
         self._parameter_schedule_steps = dict(schedule_steps)
+        self._parameter_birth_outer_iterations = dict(
+            birth_outer_iterations
+        )
         self._active_parameter_names = tuple(schedule_steps)
         self._pending_parameter_learning_rates = None
         
@@ -418,7 +453,7 @@ class SPSA(StepwiseOptimizer):
             birth_outer_iterations + 1.0
         ) ** (-self._parameter_birth_perturbation_exponent)
 
-        # Modulate the schedules according to their parameter age
+        # Modulate schedule strength according to parameter birth iteration.
         learning_rates *= learning_rate_birth_factors
         perturbations *= perturbation_birth_factors
 

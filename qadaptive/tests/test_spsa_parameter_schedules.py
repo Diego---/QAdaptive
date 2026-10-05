@@ -333,3 +333,100 @@ def test_parameter_dependent_step_uses_current_schedule_then_advances(
         "θ_0": 0.2,
         "θ_1": 0.2 / np.sqrt(2.0),
     })
+
+def test_parameter_birth_outer_iterations_are_preserved_for_survivors():
+    optimizer = make_optimizer()
+
+    optimizer.initialize(
+        np.zeros(2),
+        quadratic,
+        parameter_names=["θ_0", "θ_1"],
+        outer_iteration=0,
+    )
+
+    optimizer.initialize(
+        np.zeros(3),
+        quadratic,
+        parameter_names=["θ_0", "θ_1", "θ_2"],
+        outer_iteration=4,
+    )
+
+    assert optimizer.parameter_birth_outer_iterations == {
+        "θ_0": 0,
+        "θ_1": 0,
+        "θ_2": 4,
+    }
+    
+def test_parameter_birth_modulation_scales_new_parameter_schedules():
+    optimizer = SPSA(
+        parameter_dependent_schedules=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.8,
+        alpha=0.5,
+        c=0.2,
+        gamma=0.25,
+        stability_constant=0.0,
+    )
+
+    optimizer.set_parameter_birth_power_series(
+        learning_rate_exponent=0.5,
+        perturbation_exponent=0.25,
+    )
+
+    optimizer.initialize(
+        np.zeros(1),
+        quadratic,
+        parameter_names=["θ_0"],
+        outer_iteration=0,
+    )
+
+    optimizer.initialize(
+        np.zeros(2),
+        quadratic,
+        parameter_names=["θ_0", "θ_1"],
+        outer_iteration=3,
+    )
+
+    learning_rates, perturbations = (
+        optimizer._get_parameter_schedule_values()
+    )
+
+    np.testing.assert_allclose(
+        learning_rates,
+        [
+            0.8,
+            0.8 / 4**0.5,
+        ],
+    )
+
+    np.testing.assert_allclose(
+        perturbations,
+        [
+            0.2,
+            0.2 / 4**0.25,
+        ],
+    )
+    
+def test_restart_parameter_schedules_preserves_birth_iterations():
+    optimizer = make_optimizer()
+
+    optimizer.initialize(
+        np.zeros(1),
+        quadratic,
+        parameter_names=["θ_0"],
+        outer_iteration=2,
+    )
+
+    optimizer.step(np.zeros(1), quadratic)
+
+    births_before = optimizer.parameter_birth_outer_iterations
+
+    optimizer.restart_parameter_schedules()
+
+    assert optimizer.parameter_schedule_steps == {
+        "θ_0": 0,
+    }
+
+    assert optimizer.parameter_birth_outer_iterations == births_before
