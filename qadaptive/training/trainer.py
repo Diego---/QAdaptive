@@ -335,6 +335,17 @@ class InnerLoopTrainer:
                 **loss_kwargs,
             )
             
+            birth_outer_iterations = getattr(
+                self.optimizer,
+                "parameter_birth_outer_iterations",
+                None,
+            )
+
+            if birth_outer_iterations:
+                self.recorder.set_parameter_birth_outer_iterations(
+                    birth_outer_iterations
+                )
+            
             if restart_parameter_schedules:
                 restart_schedules = getattr(
                     self.optimizer,

@@ -128,6 +128,13 @@ def test_recorder_records_serializes_and_plots_parameter_schedules():
         param_names=["θ_0", "θ_1"],
         initial_point=[0.0, 0.0],
     )
+    
+    recorder.set_parameter_birth_outer_iterations(
+        {
+            "θ_0": 0,
+            "θ_1": 3,
+        }
+    )
 
     recorder(
         iteration=1,
@@ -158,6 +165,10 @@ def test_recorder_records_serializes_and_plots_parameter_schedules():
     assert first["schedule_steps_used"] == {"θ_0": 0, "θ_1": 3}
     assert first["learning_rates"] == {"θ_0": 0.8, "θ_1": 0.4}
     assert first["perturbations"] == {"θ_0": 0.2, "θ_1": 0.1}
+    assert payload["runs"][0]["parameter_birth_outer_iterations"] == {
+        "θ_0": 0,
+        "θ_1": 3,
+    }
 
     lr_figure, lr_axes = recorder.plot_learning_rates(parameters=["θ_1"])
     c_figure, c_axes = recorder.plot_perturbations(parameters=["θ_0"])

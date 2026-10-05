@@ -284,6 +284,52 @@ class InnerLoopRecorder:
             },
         )
         return record
+    
+    def set_parameter_birth_outer_iterations(
+        self,
+        birth_outer_iterations: Mapping[str, int],
+    ) -> TrainingRunRecord:
+        """
+        Attach per-parameter birth iterations to the active training run.
+
+        Parameters
+        ----------
+        birth_outer_iterations : Mapping[str, int]
+            Mapping from active parameter names to the outer-loop iteration at
+            which each parameter was first introduced.
+
+        Returns
+        -------
+        TrainingRunRecord
+            The active run with updated birth metadata.
+        """
+        if self._active_run is None:
+            raise RuntimeError(
+                "Cannot attach parameter birth metadata without an active run."
+            )
+
+        birth_mapping = _copy_parameter_mapping(
+            birth_outer_iterations,
+            active_parameter_names=self._active_run.param_names,
+            cast=int,
+            label="parameter_birth_outer_iterations",
+        )
+
+        if birth_mapping is None:
+            raise ValueError("Parameter birth metadata cannot be None.")
+
+        if set(birth_mapping) != set(self._active_run.param_names):
+            raise ValueError(
+                "Parameter birth metadata must contain every active parameter."
+            )
+
+        if any(iteration < 0 for iteration in birth_mapping.values()):
+            raise ValueError(
+                "Parameter birth outer iterations must be non-negative."
+            )
+
+        self._active_run.parameter_birth_outer_iterations = birth_mapping
+        return self._active_run
 
     def clear(self) -> None:
         """Discard all recorded runs while preserving recorder configuration."""
@@ -490,6 +536,7 @@ class InnerLoopRecorder:
             "outer_iteration": None
             if record.outer_iteration is None
             else int(record.outer_iteration),
+            "parameter_birth_outer_iterations": record.parameter_birth_outer_iterations,
             "action": record.action,
             "accepted_outer_step": record.accepted_outer_step,
             "note": record.note,
