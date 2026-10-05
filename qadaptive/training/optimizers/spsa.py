@@ -238,7 +238,13 @@ class SPSA(StepwiseOptimizer):
     @property
     def parameter_birth_outer_iterations(self) -> dict[str, int]:
         """
-        Return the outer-loop iteration at which each active parameter was born.
+        Return the birth outer iteration of each active parameter.
+
+        Returns
+        -------
+        dict[str, int]
+            Mapping from parameter name to the outer-loop iteration at which that
+            parameter was first introduced.
         """
         return dict(self._parameter_birth_outer_iterations)
 
@@ -271,8 +277,10 @@ class SPSA(StepwiseOptimizer):
         """
         Reconcile per-parameter schedule state with the currently active parameters.
 
-        Surviving parameters retain their schedule step, newly introduced
-        parameters start at zero, and parameters no longer present are discarded.
+        Surviving parameters retain both their schedule step and birth iteration.
+        Newly introduced parameters start at schedule step zero and are assigned the
+        current outer iteration as their birth iteration. Parameters no longer present
+        are discarded from both forms of state.
         """
         parameter_names = tuple(parameter_names)
 
@@ -369,7 +377,8 @@ class SPSA(StepwiseOptimizer):
         """
         Restart the SPSA schedules of all currently active parameters.
 
-        Each active parameter's schedule step is reset to zero.
+        Each active parameter's schedule step is reset to zero. Parameter birth
+        iterations are preserved, so birth-strength modulation is unchanged.
         """
         if not self.parameter_dependent_schedules:
             raise RuntimeError(
@@ -389,7 +398,9 @@ class SPSA(StepwiseOptimizer):
         """
         Return the current learning rate and perturbation for each active parameter.
 
-        Each schedule is evaluated at the parameter's own SPSA schedule step.
+        Each base schedule is evaluated at the parameter's own SPSA schedule step.
+        The resulting value is then modulated according to the outer-loop iteration
+        at which that parameter was introduced.
 
         Returns
         -------
@@ -836,8 +847,10 @@ class SPSA(StepwiseOptimizer):
         parameter_names : list[str] | tuple[str, ...] | None, optional
             Names of parameters corresponding to the entries of ``x0``.
         outer_iteration : int | None, optional
-            Outer-loop iteration at which the new run is started. Used for
-            parameter-dependent schedule modulation.
+            Outer-loop iteration associated with the current training run. When
+            parameter-dependent schedules are enabled, newly introduced parameters
+            are assigned this iteration as their birth iteration. Existing parameters
+            retain their previously recorded birth iteration.
         **kwargs
             Additional keyword arguments forwarded to calibration and objective evaluation.
         """

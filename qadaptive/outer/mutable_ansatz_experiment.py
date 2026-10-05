@@ -1768,6 +1768,8 @@ class MutableAnsatzExperiment:
         - parameter-memory history,
         - the trainer's last accepted cost and parameter vector,
         - the outer-loop iteration counter.
+        - per-parameter optimizer schedule steps,
+        - per-parameter birth outer iterations,
         """
         
         optimizer = self.trainer.optimizer
