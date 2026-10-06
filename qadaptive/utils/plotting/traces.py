@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 
 from qadaptive.outer.outer_loop import OuterStepResult
 from qadaptive.training.history import TrainingRunRecord
+
+
+ObjectiveSource = Literal["auto", "evaluation", "optimizer_estimate"]
 
 
 @dataclass
@@ -64,6 +68,7 @@ class TrainingRunTrace:
     param_names: list[str]
     params: np.ndarray
     values: np.ndarray
+    objective_source: Literal["evaluation", "optimizer_estimate"]
     stepsizes: np.ndarray
     extra_values: np.ndarray
     extra_stds: np.ndarray
@@ -108,22 +113,63 @@ def _iteration_param_matrix(record: TrainingRunRecord) -> np.ndarray:
     return np.vstack(rows)
 
 
-def _iteration_value_vector(record: TrainingRunRecord) -> np.ndarray:
-    """
-    Return the recorded per-iteration objective values as a vector.
+def _resolve_objective_source(
+    records: Sequence[TrainingRunRecord],
+    source: ObjectiveSource,
+) -> Literal["evaluation", "optimizer_estimate"]:
+    """Resolve which objective quantity should be plotted."""
+    if source not in {"auto", "evaluation", "optimizer_estimate"}:
+        raise ValueError(
+            "objective_source must be one of "
+            "{'auto', 'evaluation', 'optimizer_estimate'}."
+        )
 
-    Parameters
-    ----------
-    record : TrainingRunRecord
-        Training-run record from which to extract objective values.
+    if source != "auto":
+        return source
 
-    Returns
-    -------
-    np.ndarray
-        Objective values with shape ``(num_iterations,)``.
-    """
-    return np.asarray([float(iteration.value) for iteration in record.iterations], dtype=float)
+    if all(
+        all(
+            iteration.evaluation_value is not None
+            for iteration in record.iterations
+        )
+        for record in records
+    ):
+        return "evaluation"
 
+    return "optimizer_estimate"
+
+
+def _evaluation_value_vector(record: TrainingRunRecord) -> np.ndarray:
+    """Return explicit evaluations aligned to updated parameter points."""
+    values = _iteration_optional_vector(record, "evaluation_value")
+
+    if values.size > 0 and record.final_value is not None:
+        values[-1] = float(record.final_value)
+
+    return values
+
+
+def _optimizer_estimate_vector(
+    record: TrainingRunRecord,
+    *,
+    include_initial: bool,
+) -> np.ndarray:
+    """Return optimizer estimates aligned to the pre-update points."""
+    estimates = np.asarray(
+        [
+            float(iteration.optimizer_estimate)
+            for iteration in record.iterations
+        ],
+        dtype=float,
+    )
+
+    if include_initial:
+        return np.concatenate((estimates, [np.nan]))
+
+    if estimates.size == 0:
+        return estimates
+
+    return np.concatenate((estimates[1:], [np.nan]))
 
 def _iteration_stepsize_vector(record: TrainingRunRecord) -> np.ndarray:
     """
@@ -219,6 +265,7 @@ def build_training_run_traces(
     outer_step_history: Sequence[OuterStepResult] | None = None,
     include_initial: bool = True,
     missing_initial_value: float = np.nan,
+    objective_source: ObjectiveSource = "auto",
 ) -> list[TrainingRunTrace]:
     """
     Build plotting traces from stored training-run records.
@@ -239,6 +286,12 @@ def build_training_run_traces(
     missing_initial_value : float, optional
         Placeholder value used when `include_initial=True` but a run has no stored
         initial objective value. Defaults to `np.nan`.
+    objective_source : {"auto", "evaluation", "optimizer_estimate"}, optional
+        Quantity used for the objective trace. Evaluation values are aligned to
+        updated parameter points and include the final explicit evaluation.
+        Optimizer estimates are aligned to the pre-update points they describe.
+        `"auto"` chooses evaluations only when every recorded update has one;
+        otherwise it chooses optimizer estimates.
 
     Returns
     -------
@@ -267,6 +320,8 @@ def build_training_run_traces(
             f"Got {len(outer_step_history)} outer-step records for {len(records)} training runs."
         )
 
+    resolved_source = _resolve_objective_source(records, objective_source)
+
     traces: list[TrainingRunTrace] = []
     cursor = 0 if include_initial else 1
 
@@ -282,7 +337,6 @@ def build_training_run_traces(
             )
 
         iter_params = _iteration_param_matrix(record)
-        iter_values = _iteration_value_vector(record)
         iter_stepsizes = _iteration_stepsize_vector(record)
         iter_extra_values = _iteration_optional_vector(record, "extra_value")
         iter_extra_stds = _iteration_optional_vector(record, "extra_std")
@@ -293,18 +347,37 @@ def build_training_run_traces(
             else:
                 params = np.vstack([initial_point.reshape(1, -1), iter_params])
 
-            initial_value = (
-                float(record.initial_value)
-                if record.initial_value is not None
-                else float(missing_initial_value)
-            )
-            values = np.concatenate(([initial_value], iter_values))
+            if resolved_source == "evaluation":
+                initial_value = (
+                    float(record.final_value)
+                    if len(record.iterations) == 0
+                    and record.final_value is not None
+                    else (
+                        float(record.initial_value)
+                        if record.initial_value is not None
+                        else float(missing_initial_value)
+                    )
+                )
+                values = np.concatenate(
+                    ([initial_value], _evaluation_value_vector(record))
+                )
+            else:
+                values = _optimizer_estimate_vector(
+                    record,
+                    include_initial=True,
+                )
             stepsizes = np.concatenate(([np.nan], iter_stepsizes))
             extra_values = np.concatenate(([np.nan], iter_extra_values))
             extra_stds = np.concatenate(([np.nan], iter_extra_stds))
         else:
             params = iter_params
-            values = iter_values
+            if resolved_source == "evaluation":
+                values = _evaluation_value_vector(record)
+            else:
+                values = _optimizer_estimate_vector(
+                    record,
+                    include_initial=False,
+                )
             stepsizes = iter_stepsizes
             extra_values = iter_extra_values
             extra_stds = iter_extra_stds
@@ -335,6 +408,7 @@ def build_training_run_traces(
                 param_names=param_names,
                 params=params,
                 values=values,
+                objective_source=resolved_source,
                 stepsizes=stepsizes,
                 extra_values=extra_values,
                 extra_stds=extra_stds,

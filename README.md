@@ -200,7 +200,7 @@ schedule = [
 # --- Run the adaptive loop --------------------------------------------------
 results = experiment.run_outer_loop(
     loss_function=vqe_cost,
-    loss_next=energy,
+    evaluation_loss=energy,
     plan_schedule=schedule,
     outer_iterations=len(schedule),
     train_iterations=TRAIN_ITERATIONS,
@@ -221,7 +221,7 @@ final_circuit = experiment.ansatz
 final_params = experiment.get_current_parameter_dict()
 ```
 
-`loss_next=energy` evaluates the updated parameter point for the recorded objective values. `trainer_iteration_reset=None` continues the SPSA iteration schedule across training phases. Parameter memory reuses values for parameters that remain active, newly introduced parameters start at zero.
+`evaluation_loss=energy` explicitly evaluates every accepted updated parameter point with `energy`. Leaving `evaluation_loss=None` performs no additional per-step evaluation; the recorder keeps the optimizer estimate instead. The final parameter point is always evaluated explicitly, using `evaluation_loss` when provided and otherwise `loss_function`. `trainer_iteration_reset=None` continues the SPSA iteration schedule across training phases. Parameter memory reuses values for parameters that remain active, newly introduced parameters start at zero.
 
 The `cx_identity` block becomes the identity at zero rotation angles. Zero initialisation preserves the current circuit's action for such blocks, this property depends on the selected block.
 
@@ -340,7 +340,10 @@ experiment.plot_outer_history(ylabel="Energy")
 experiment.plot_architecture_evolution(indices=[0, -1])
 experiment.plot_complexity_evolution()
 
-experiment.recorder.plot_objective()
+# Select the objective provenance explicitly, or use "auto".
+experiment.recorder.plot_objective(source="auto")
+# experiment.recorder.plot_objective(source="evaluation")
+# experiment.recorder.plot_objective(source="optimizer_estimate")
 experiment.recorder.plot_parameters()
 experiment.recorder.plot_parameter_heatmap(normalize=True)
 
@@ -355,6 +358,8 @@ fig.savefig("outer_history.pdf", bbox_inches="tight")
 ```
 
 `plot_outer_history()` shows retained costs and separate markers for rejected trial costs. `plot_complexity_evolution()` applies the same distinction to parameter and two-qubit-instruction counts.
+
+`recorder.plot_objective(source=...)` distinguishes objective provenance. `"evaluation"` plots values explicitly evaluated at the recorded parameter points and includes the mandatory final evaluation. `"optimizer_estimate"` plots optimizer estimates at the pre-update points they describe. `"auto"` uses evaluations only when every recorded step has one; otherwise it uses optimizer estimates.
 
 `plot_architecture_evolution()` draws accepted circuit snapshots. Its `indices` select positions in `accepted_ansatz_history`, not outer iteration numbers; `[0, -1]` selects the first and last recorded accepted states.
 

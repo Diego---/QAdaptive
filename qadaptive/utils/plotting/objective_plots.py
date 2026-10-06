@@ -69,7 +69,13 @@ def plot_cost_with_outer_boundaries(
     x_all = np.concatenate(x_all)
     y_all = np.concatenate(y_all)
 
-    ax.plot(x_all, y_all, ".-", label="Objective")
+    objective_source = traces[0].objective_source
+    objective_label = (
+        "Explicit evaluation"
+        if objective_source == "evaluation"
+        else "Optimizer estimate"
+    )
+    ax.plot(x_all, y_all, ".-", label=objective_label)
 
     extra_finite = np.asarray([], dtype=float)
     if show_extra:

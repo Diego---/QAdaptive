@@ -396,7 +396,6 @@ class ADAM(StepwiseOptimizer):
         x: np.ndarray,
         fx: float,
         fun: Callable[[np.ndarray], float],
-        fun_next: Callable[[np.ndarray], float] | None,
         iteration_start: float = 0.0,
         iteration: int = 0,
         **kwargs,
@@ -414,14 +413,12 @@ class ADAM(StepwiseOptimizer):
             Current function value.
         fun : Callable[[np.ndarray], float]
             Objective function.
-        fun_next : Callable[[np.ndarray], float] | None
-            Optional objective used to evaluate the proposed next point.
         iteration_start : float, optional
             Iteration start time used only for logging.
         iteration : int, optional
             Global iteration index used only for logging.
         **kwargs
-            Additional keyword arguments forwarded to ``fun`` or ``fun_next``.
+            Additional keyword arguments forwarded to ``fun``.
 
         Returns
         -------
@@ -476,16 +473,20 @@ class ADAM(StepwiseOptimizer):
         fx_next = None
 
         if self.blocking:
-            eval_fun = fun if fun_next is None else fun_next
-            fx_next = float(eval_fun(x_next, **kwargs))
-
-            if fun_next is None:
-                self._nfev += 1
-            else:
-                self._nextfev += 1
+            fx_next = float(fun(x_next, **kwargs))
+            self._nfev += 1
 
             allowed = 0.0 if self.allowed_increase is None else self.allowed_increase
             if fx_next > fx + allowed:
+                if self.callback is not None:
+                    self.callback(
+                        self.nfev,
+                        x_next,
+                        fx_next,
+                        float(np.linalg.norm(update)),
+                        False,
+                    )
+
                 logger.info(
                     "ADAM rejected iteration %d because fx_next=%s exceeded fx+allowed=%s.",
                     iteration,
@@ -545,7 +546,6 @@ class ADAM(StepwiseOptimizer):
         self,
         x: np.ndarray,
         loss_function: Callable[[np.ndarray], float],
-        loss_next: Callable[[np.ndarray], float] | None = None,
         **kwargs,
     ) -> tuple[bool, np.ndarray, float | None, np.ndarray | None, float | None]:
         """
@@ -557,8 +557,6 @@ class ADAM(StepwiseOptimizer):
             Current parameter vector.
         loss_function : Callable[[np.ndarray], float]
             Objective function.
-        loss_next : Callable[[np.ndarray], float] | None, optional
-            Optional objective used to evaluate the proposed next point.
         **kwargs
             Additional keyword arguments forwarded to the objective.
 
@@ -585,7 +583,6 @@ class ADAM(StepwiseOptimizer):
             x,
             fx_estimate,
             loss_function,
-            loss_next,
             iteration=next_iteration,
             **kwargs,
         )
@@ -662,7 +659,6 @@ class ADAM(StepwiseOptimizer):
             skip, x_next, fx_next, gradient_estimate, fx_estimate = self.step(
                 x,
                 fun,
-                loss_next=None,
                 jac=jac,
             )
 
@@ -675,22 +671,28 @@ class ADAM(StepwiseOptimizer):
 
             x = x_next
 
+            observed_value = fx_next
+            if (
+                observed_value is None
+                and (self.callback is not None or self.termination_checker is not None)
+            ):
+                observed_value = float(fun(x))
+                self._nfev += 1
+
             if self.callback is not None:
-                fx_cb = fx_estimate if fx_next is None else fx_next
                 self.callback(
                     self.nfev,
                     x,
-                    float(fx_cb),
+                    float(observed_value),
                     0.0 if self.last_stepsize is None else self.last_stepsize,
                     True,
                 )
 
             if self.termination_checker is not None:
-                fx_check = fx_estimate if fx_next is None else fx_next
                 if self.termination_checker(
                     self.nfev,
                     x,
-                    float(fx_check),
+                    float(observed_value),
                     0.0 if self.last_stepsize is None else self.last_stepsize,
                     True,
                 ):

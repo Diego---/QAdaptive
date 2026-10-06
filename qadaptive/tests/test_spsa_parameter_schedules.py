@@ -257,7 +257,6 @@ def test_process_update_uses_parameter_dependent_learning_rates():
         x=x,
         fx=0.0,
         fun=lambda x: float(np.sum(x**2)),
-        fun_next=None,
     )
 
     expected_learning_rates = np.array([
@@ -430,3 +429,25 @@ def test_restart_parameter_schedules_preserves_birth_iterations():
     }
 
     assert optimizer.parameter_birth_outer_iterations == births_before
+
+
+def test_spsa_minimize_termination_checker_receives_value_at_reported_point():
+    observations = []
+
+    def checker(nfev, params, value, stepsize, accepted):
+        del nfev, stepsize, accepted
+        observations.append((np.asarray(params, dtype=float).copy(), float(value)))
+        return True
+
+    optimizer = SPSA(
+        maxiter=5,
+        learning_rate=0.1,
+        perturbation=0.1,
+        termination_checker=checker,
+    )
+
+    optimizer.minimize(quadratic, np.array([0.8, -0.4]))
+
+    assert len(observations) == 1
+    params, value = observations[0]
+    assert value == pytest.approx(quadratic(params))

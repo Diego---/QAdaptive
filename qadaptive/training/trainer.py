@@ -155,85 +155,24 @@ class InnerLoopTrainer:
         ansatz: QuantumCircuit,
         loss_function: Callable[[np.ndarray], float],
         x: np.ndarray,
-        loss_next: Callable[[np.ndarray], float] | None = None,
         **kwargs,
     ) -> tuple[bool, np.ndarray, float | None, np.ndarray | None, float | None]:
-        """
-        Perform one optimization step for the current ansatz.
-
-        Parameters
-        ----------
-        ansatz : QuantumCircuit
-            Current ansatz circuit.
-        loss_function : Callable[[np.ndarray], float]
-            Objective function to minimize. It must accept the parameter vector
-            and the keyword argument ``ansatz``.
-        x : np.ndarray
-            Current parameter vector.
-        loss_next : Callable[[np.ndarray], float] | None, optional
-            Optional objective used to evaluate the proposed next point.
-        **kwargs
-            Additional keyword arguments forwarded to the objective.
-
-        Returns
-        -------
-        tuple[bool, np.ndarray, float | None, np.ndarray | None, float | None]
-            Tuple ``(skip, x_next, fx_next, gradient_estimate, fx_estimate)``.
-        """
+        """Perform one optimizer step for the current fixed ansatz."""
         if self.optimizer is None:
             raise RuntimeError(
                 "The optimizer is not set. Set an optimizer before running a training step."
             )
 
         x = np.asarray(x, dtype=float)
-        # The ansatz kwarg gets used by the loss function, whose signature can be
-        # loss(params, ansatz)
         loss_kwargs = {**kwargs, "ansatz": ansatz}
-
-        return self.optimizer.step(
-            x,
-            loss_function,
-            loss_next=loss_next,
-            **loss_kwargs,
-        )
-
-    def _run_optimizer_callback_if_present(
-        self,
-        params: np.ndarray,
-        fx_value: float,
-        accepted: bool,
-    ) -> None:
-        """
-        Execute optimizer-level callback, if present.
-
-        Parameters
-        ----------
-        params : np.ndarray
-            Current parameter vector.
-        fx_value : float
-            Objective value associated with ``params``.
-        accepted : bool
-            Whether the step was accepted.
-        """
-        if self.optimizer.callback is None:
-            return
-
-        step_size = 0.0 if self.optimizer.last_stepsize is None else self.optimizer.last_stepsize
-
-        self.optimizer.callback(
-            self.optimizer.nfev,
-            params,
-            fx_value,
-            step_size,
-            accepted,
-        )
+        return self.optimizer.step(x, loss_function, **loss_kwargs)
 
     def train_one_time(
         self,
         ansatz: QuantumCircuit,
         loss_function: Callable[[np.ndarray], float],
         initial_point: list[float] | np.ndarray | None = None,
-        loss_next: Callable[[np.ndarray], float] | None = None,
+        evaluation_loss: Callable[[np.ndarray], float] | None = None,
         iterations: int = 100,
         iteration_start: int | None = None,
         initial_value: float | None = None,
@@ -254,8 +193,8 @@ class InnerLoopTrainer:
             Objective function to minimize.
         initial_point : list[float] | np.ndarray | None, optional
             Initial parameter vector. If None, a random +/-1 vector is used.
-        loss_next : Callable[[np.ndarray], float] | None, optional
-            Optional objective used to evaluate the proposed next point.
+        evaluation_loss : Callable[[np.ndarray], float] | None, optional
+            Optional objective evaluated at every accepted updated parameter point. If None, no additional per-step evaluation is performed.
         iterations : int, optional
             Number of optimization steps.
         iteration_start : int | None, optional
@@ -305,7 +244,7 @@ class InnerLoopTrainer:
             )
 
         if initial_value is None and self.recorder.record_initial_value:
-            objective_for_initial = loss_function if loss_next is None else loss_next
+            objective_for_initial = loss_function if evaluation_loss is None else evaluation_loss
             try:
                 initial_value = float(
                     objective_for_initial(x, ansatz=ansatz, **kwargs)
@@ -324,6 +263,7 @@ class InnerLoopTrainer:
 
         start = time()
         k = 0
+        last_evaluation_value: float | None = None
 
         try:
             self.optimizer.initialize(
@@ -365,11 +305,11 @@ class InnerLoopTrainer:
                 k += 1
                 iteration_begin = time()
 
+                x_before = np.asarray(x, dtype=float).copy()
                 skip, x_next, fx_next, gradient_estimate, fx_estimate = self.step(
                     ansatz,
                     loss_function,
                     x,
-                    loss_next=loss_next,
                     **kwargs,
                 )
 
@@ -382,20 +322,34 @@ class InnerLoopTrainer:
                     )
                     continue
 
-                x = x_next
-                fx_callback = float(fx_estimate if fx_next is None else fx_next)
+                x = np.asarray(x_next, dtype=float)
+
+                evaluation_value = None
+                if evaluation_loss is not None:
+                    if fx_next is not None and evaluation_loss is loss_function:
+                        evaluation_value = float(fx_next)
+                    else:
+                        evaluation_value = float(
+                            evaluation_loss(x, ansatz=ansatz, **kwargs)
+                        )
+                elif fx_next is not None:
+                    evaluation_value = float(fx_next)
+
+                if evaluation_loss is not None and evaluation_value is not None:
+                    last_evaluation_value = float(evaluation_value)
+
                 step_size = (
                     0.0
                     if self.optimizer.last_stepsize is None
                     else float(self.optimizer.last_stepsize)
                 )
 
-                self._run_optimizer_callback_if_present(x, fx_callback, True)
                 self.recorder(
                     iteration=k,
                     nfev=self.optimizer.nfev,
                     params=x,
-                    value=fx_callback,
+                    optimizer_estimate=float(fx_estimate),
+                    evaluation_value=evaluation_value,
                     stepsize=step_size,
                     accepted=True,
                     gradient=gradient_estimate,
@@ -420,10 +374,13 @@ class InnerLoopTrainer:
                 if checker is None:
                     checker = self.optimizer.termination_checker
 
+                checker_params = x if evaluation_value is not None else x_before
+                checker_value = float(evaluation_value) if evaluation_value is not None else float(fx_estimate)
+
                 if checker is not None and checker(
                     self.optimizer.nfev,
-                    x,
-                    fx_callback,
+                    checker_params,
+                    checker_value,
                     step_size,
                     True,
                 ):
@@ -442,14 +399,19 @@ class InnerLoopTrainer:
             result = OptimizerResult()
             result.x = x
 
-            if loss_next is None:
-                logger.info("Calculating cost function value for final parameters.")
+            if evaluation_loss is None:
+                logger.info("Calculating objective value for final parameters.")
                 result.fun = float(loss_function(x, ansatz=ansatz, **kwargs))
-                logger.info("Final cost function value: %s", result.fun)
+            elif last_evaluation_value is not None:
+                logger.info(
+                    "Reusing explicit evaluation already recorded at final parameters."
+                )
+                result.fun = float(last_evaluation_value)
             else:
-                logger.info("Calculating custom cost function value for final parameters.")
-                result.fun = float(loss_next(x, ansatz=ansatz, **kwargs))
-                logger.info("Final cost function value (from custom function): %s", result.fun)
+                logger.info("Calculating evaluation objective for final parameters.")
+                result.fun = float(evaluation_loss(x, ansatz=ansatz, **kwargs))
+
+            logger.info("Final objective value: %s", result.fun)
 
             result.nfev = self.optimizer.nfev
             result.nit = k

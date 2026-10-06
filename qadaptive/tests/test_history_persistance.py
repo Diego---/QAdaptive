@@ -99,7 +99,7 @@ def test_save_history_preserves_accepted_run_data(
     
     metadata = manifest["inner_loop_recorder"]
 
-    assert metadata["schema_version"] == 1
+    assert metadata["schema_version"] == 2
     assert metadata["record_initial_value"] is True
     assert metadata["record_gradients"] is True
     assert metadata["extra_evaluation_frequency"] == 1
@@ -178,6 +178,8 @@ def test_save_history_preserves_accepted_run_data(
                 "iteration",
                 "nfev",
                 "value",
+                "optimizer_estimate",
+                "evaluation_value",
                 "stepsize",
                 "accepted",
                 "extra_value",
@@ -403,6 +405,8 @@ def test_save_history_preserves_rejected_trial_and_accepted_state(
 
     assert live_step.gradient is not None
     assert saved_step["value"] == live_step.value
+    assert saved_step["optimizer_estimate"] == live_step.optimizer_estimate
+    assert saved_step["evaluation_value"] == live_step.evaluation_value
     assert saved_step["nfev"] == live_step.nfev
     np.testing.assert_array_equal(saved_step["params"], live_step.params)
     np.testing.assert_array_equal(saved_step["gradient"], live_step.gradient)

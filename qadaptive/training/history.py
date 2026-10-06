@@ -13,15 +13,24 @@ class IterationRecord:
     iteration: int
     nfev: int
     params: np.ndarray
-    value: float
+    optimizer_estimate: float
     stepsize: float
     accepted: bool
+    evaluation_value: float | None = None
     gradient: np.ndarray | None = None
     schedule_steps_used: dict[str, int] | None = None
     learning_rates: dict[str, float] | None = None
     perturbations: dict[str, float] | None = None
     extra_value: float | None = None
     extra_std: float | None = None
+
+
+    @property
+    def value(self) -> float:
+        """Return the explicit evaluation when present, else the optimizer estimate."""
+        if self.evaluation_value is not None:
+            return float(self.evaluation_value)
+        return float(self.optimizer_estimate)
 
 
 @dataclass
