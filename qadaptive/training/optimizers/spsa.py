@@ -1236,6 +1236,15 @@ class SPSA(StepwiseOptimizer):
             fx_next = float(fun(x_next, **kwargs))
 
             if fx + self.allowed_increase <= fx_next:
+                if self.callback is not None:
+                    self.callback(
+                        self._nfev,
+                        x_next,
+                        fx_next,
+                        float(np.linalg.norm(update)),
+                        False,
+                    )
+
                 logger.info(
                     "Iteration %s/%s rejected in %s.",
                     iteration,

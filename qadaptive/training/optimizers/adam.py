@@ -478,6 +478,15 @@ class ADAM(StepwiseOptimizer):
 
             allowed = 0.0 if self.allowed_increase is None else self.allowed_increase
             if fx_next > fx + allowed:
+                if self.callback is not None:
+                    self.callback(
+                        self.nfev,
+                        x_next,
+                        fx_next,
+                        float(np.linalg.norm(update)),
+                        False,
+                    )
+
                 logger.info(
                     "ADAM rejected iteration %d because fx_next=%s exceeded fx+allowed=%s.",
                     iteration,
@@ -662,22 +671,28 @@ class ADAM(StepwiseOptimizer):
 
             x = x_next
 
+            observed_value = fx_next
+            if (
+                observed_value is None
+                and (self.callback is not None or self.termination_checker is not None)
+            ):
+                observed_value = float(fun(x))
+                self._nfev += 1
+
             if self.callback is not None:
-                fx_cb = fx_estimate if fx_next is None else fx_next
                 self.callback(
                     self.nfev,
                     x,
-                    float(fx_cb),
+                    float(observed_value),
                     0.0 if self.last_stepsize is None else self.last_stepsize,
                     True,
                 )
 
             if self.termination_checker is not None:
-                fx_check = fx_estimate if fx_next is None else fx_next
                 if self.termination_checker(
                     self.nfev,
                     x,
-                    float(fx_check),
+                    float(observed_value),
                     0.0 if self.last_stepsize is None else self.last_stepsize,
                     True,
                 ):
