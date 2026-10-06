@@ -31,7 +31,6 @@ class StepwiseOptimizer(Optimizer, ABC):
         self.termination_checker = termination_checker
 
         self._nfev: int = 0
-        self._nextfev: int = 0
         self._initialized: bool = False
         self._last_stepsize: float | None = None
         self._last_gradient: np.ndarray | None = None
@@ -43,10 +42,6 @@ class StepwiseOptimizer(Optimizer, ABC):
         """Return the number of objective evaluations."""
         return self._nfev
 
-    @property
-    def nextfev(self) -> int:
-        """Return the number of next-point objective evaluations."""
-        return self._nextfev
 
     @property
     def iteration(self) -> int:
@@ -82,7 +77,6 @@ class StepwiseOptimizer(Optimizer, ABC):
         self,
         x: np.ndarray,
         loss_function: Callable[[np.ndarray], float],
-        loss_next: Callable[[np.ndarray], float] | None = None,
         **kwargs,
     ) -> tuple[bool, np.ndarray, float | None, np.ndarray | None, float | None]:
         """
@@ -136,7 +130,6 @@ class StepwiseOptimizer(Optimizer, ABC):
                 self._iteration
                 )
         self._nfev = 0
-        self._nextfev = 0
         self._initialized = False
 
         self._last_stepsize = None

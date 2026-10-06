@@ -1157,7 +1157,6 @@ class SPSA(StepwiseOptimizer):
         x: np.ndarray,
         fx: float,
         fun: Callable[[np.ndarray], float],
-        fun_next: Callable[[np.ndarray], float] | None,
         iteration_start: float = 0.0,
         iteration: int = 0,
         **kwargs,
@@ -1175,8 +1174,6 @@ class SPSA(StepwiseOptimizer):
             Current function value estimate.
         fun : Callable[[np.ndarray], float]
             Objective function.
-        fun_next : Callable[[np.ndarray], float] | None
-            Optional objective used to evaluate the proposed next point.
         iteration_start : float, optional
             Timestamp used for logging.
         iteration : int, optional
@@ -1234,27 +1231,11 @@ class SPSA(StepwiseOptimizer):
         logger.log(VERBOSE_LEVEL, "Proposed next point is: %s", x_next)
 
         if self.blocking:
-            if fun_next is None:
-                logger.info("Calculating cost function at next point for blocking check.")
-                self._nfev += 1
-                fx_next = float(fun(x_next, **kwargs))
-            else:
-                logger.info(
-                    "Calculating cost function at next point with custom function for blocking check."
-                    )
-                self._nextfev += 1
-                fx_next = float(fun_next(x_next, **kwargs))
+            logger.info("Calculating cost function at next point for blocking check.")
+            self._nfev += 1
+            fx_next = float(fun(x_next, **kwargs))
 
             if fx + self.allowed_increase <= fx_next:
-                if self.callback is not None:
-                    self.callback(
-                        self._nfev,
-                        x_next,
-                        fx_next,
-                        float(np.linalg.norm(update)),
-                        False,
-                    )
-
                 logger.info(
                     "Iteration %s/%s rejected in %s.",
                     iteration,
@@ -1269,7 +1250,6 @@ class SPSA(StepwiseOptimizer):
         self,
         x: np.ndarray,
         loss_function: Callable[[np.ndarray], float],
-        loss_next: Callable[[np.ndarray], float] | None = None,
         **kwargs,
     ) -> tuple[bool, np.ndarray, float | None, np.ndarray | None, float | None]:
         """
@@ -1281,8 +1261,6 @@ class SPSA(StepwiseOptimizer):
             Current parameter vector.
         loss_function : Callable[[np.ndarray], float]
             Objective function.
-        loss_next : Callable[[np.ndarray], float] | None, optional
-            Optional objective used to evaluate the proposed next point.
         **kwargs
             Additional keyword arguments forwarded to the objective.
 
@@ -1311,7 +1289,6 @@ class SPSA(StepwiseOptimizer):
             x,
             fx_estimate,
             loss_function,
-            loss_next,
             iteration_start=iter_start,
             iteration=next_iteration,
             **kwargs,
@@ -1331,7 +1308,6 @@ class SPSA(StepwiseOptimizer):
         self,
         fun: Callable[[POINT], float],
         x0: POINT,
-        fun_next: Callable[[POINT], float] | None = None,
         jac: Callable[[POINT], POINT] | None = None,
         bounds: list[tuple[float, float]] | None = None,
         **kwargs,
@@ -1345,8 +1321,6 @@ class SPSA(StepwiseOptimizer):
             Objective function.
         x0 : POINT
             Initial point.
-        fun_next : Callable[[POINT], float] | None, optional
-            Optional objective for evaluating the proposed next point.
         jac : Callable[[POINT], POINT] | None, optional
             Ignored. Present for Qiskit optimizer compatibility.
         bounds : list[tuple[float, float]] | None, optional
@@ -1371,7 +1345,6 @@ class SPSA(StepwiseOptimizer):
             skip, x_next, fx_next, gradient_estimate, fx_estimate = self.step(
                 x,
                 fun,
-                loss_next=fun_next,
                 **kwargs,
             )
 
@@ -1381,14 +1354,9 @@ class SPSA(StepwiseOptimizer):
             x = x_next
 
             if self.callback is not None:
-                fx_cb: float
                 if fx_next is None:
-                    if fun_next is None:
-                        self._nfev += 1
-                        fx_cb = float(fun(x, **kwargs))
-                    else:
-                        self._nextfev += 1
-                        fx_cb = float(fun_next(x, **kwargs))
+                    self._nfev += 1
+                    fx_cb = float(fun(x, **kwargs))
                 else:
                     fx_cb = float(fx_next)
 
@@ -1432,12 +1400,8 @@ class SPSA(StepwiseOptimizer):
         result = OptimizerResult()
         result.x = x
 
-        if fun_next is None:
-            self._nfev += 1
-            result.fun = float(fun(x, **kwargs))
-        else:
-            self._nextfev += 1
-            result.fun = float(fun_next(x, **kwargs))
+        self._nfev += 1
+        result.fun = float(fun(x, **kwargs))
 
         result.nfev = self._nfev
         result.nit = self._steps_in_run

@@ -774,7 +774,7 @@ class MutableAnsatzExperiment:
         self, 
         loss_function: Callable[[np.ndarray], float],
         initial_point: list | np.ndarray | None = None,
-        loss_next: Callable[[np.ndarray], float] | None = None,
+        evaluation_loss: Callable[[np.ndarray], float] | None = None,
         iterations: int = 100,
         update_parameter_memory: bool = True,
         trainer_iteration_reset: int | None = None,
@@ -793,8 +793,8 @@ class MutableAnsatzExperiment:
             The cost function to evaluate the ansatz.
         initial_point : list | np.ndarray | None, optional
             Initial parameter values for the optimization. If None, the optimizer's default.
-        loss_next : Callable[[np.ndarray], float], optional
-            An optional function to evaluate the objective at the next step.
+        evaluation_loss : Callable[[np.ndarray], float], optional
+            Optional objective evaluated at accepted updated parameter points.
         iterations : int
             The number of optimization steps.
         update_parameter_memory : bool, optional
@@ -838,7 +838,7 @@ class MutableAnsatzExperiment:
             ansatz=current_ansatz,
             loss_function=loss_function,
             initial_point=initial_point_array,
-            loss_next=loss_next,
+            evaluation_loss=evaluation_loss,
             iterations=iterations,
             iteration_start=trainer_iteration_reset,
             outer_iteration=outer_iteration,
@@ -874,7 +874,7 @@ class MutableAnsatzExperiment:
         plan: OuterStepPlan,
         train_iterations: int = 100,
         initial_point_generator: Callable[..., np.ndarray] | None = None,
-        loss_next: Callable[[np.ndarray], float] | None = None,
+        evaluation_loss: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
         trainer_iteration_reset: int | None = 0,
         update_parameter_memory: bool = True,
@@ -906,8 +906,8 @@ class MutableAnsatzExperiment:
             state and the reconciled `initial_point` to produce the actual initial
             point used for training. The signature of the generator should be
             `generator(iteration: int) -> np.ndarray`.
-        loss_next : Callable[[np.ndarray], float] | None, optional
-            Optional objective for next-step evaluation during training.
+        evaluation_loss : Callable[[np.ndarray], float] | None, optional
+            Optional objective evaluated at accepted updated parameter points during training.
         train_after_plan : bool, optional
             Whether to retrain after executing the plan.
         trainer_iteration_reset : int | None,  optional
@@ -1044,7 +1044,7 @@ class MutableAnsatzExperiment:
             train_result = self.train_one_time(
                 loss_function=loss_function,
                 initial_point=initial_point,
-                loss_next=loss_next,
+                evaluation_loss=evaluation_loss,
                 iterations=train_iterations,
                 update_parameter_memory=update_parameter_memory,
                 trainer_iteration_reset=trainer_iteration_reset,
@@ -1228,7 +1228,7 @@ class MutableAnsatzExperiment:
         train_before_first_plan: bool = True,
         initial_point: list | np.ndarray | None = None,
         initial_point_generator: Callable[..., np.ndarray] | None = None,
-        loss_next: Callable[[np.ndarray], float] | None = None,
+        evaluation_loss: Callable[[np.ndarray], float] | None = None,
         train_after_plan: bool = True,
         trainer_iteration_reset: int | None = 0,
         update_parameter_memory: bool = True,
@@ -1281,8 +1281,8 @@ class MutableAnsatzExperiment:
             state and the reconciled `initial_point` to produce the actual initial
             point used for training. The signature of the generator should be
             `generator(iteration: int) -> np.ndarray`.
-        loss_next : Callable[[np.ndarray], float] | None, optional
-            Optional objective for next-step evaluation during training.
+        evaluation_loss : Callable[[np.ndarray], float] | None, optional
+            Optional objective evaluated at accepted updated parameter points during training.
         train_after_plan : bool, optional
             Whether to retrain after executing each plan.
         trainer_iteration_reset : int | None, optional
@@ -1377,7 +1377,7 @@ class MutableAnsatzExperiment:
             train_result = self.train_one_time(
                 loss_function=loss_function,
                 initial_point=initial_point,
-                loss_next=loss_next,
+                evaluation_loss=evaluation_loss,
                 iterations=current_train_iterations,
                 update_parameter_memory=update_parameter_memory,
                 trainer_iteration_reset=trainer_iteration_reset,
@@ -1481,7 +1481,7 @@ class MutableAnsatzExperiment:
                     plan=plan,
                     train_iterations=current_train_iterations,
                     initial_point_generator=initial_point_generator,
-                    loss_next=loss_next,
+                    evaluation_loss=evaluation_loss,
                     train_after_plan=train_after_plan,
                     trainer_iteration_reset=trainer_iteration_reset,
                     update_parameter_memory=update_parameter_memory,

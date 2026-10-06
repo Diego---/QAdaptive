@@ -144,9 +144,10 @@ class InnerLoopRecorder:
         iteration: int,
         nfev: int,
         params: Sequence[float] | np.ndarray,
-        value: float,
+        optimizer_estimate: float,
         stepsize: float,
         accepted: bool,
+        evaluation_value: float | None = None,
         gradient: Sequence[float] | np.ndarray | None = None,
         schedule_steps_used: Mapping[str, int] | None = None,
         learning_rates: Mapping[str, float] | None = None,
@@ -203,9 +204,10 @@ class InnerLoopRecorder:
             iteration=int(iteration),
             nfev=int(nfev),
             params=point,
-            value=float(value),
+            optimizer_estimate=float(optimizer_estimate),
             stepsize=float(stepsize),
             accepted=bool(accepted),
+            evaluation_value=None if evaluation_value is None else float(evaluation_value),
             gradient=gradient_array,
             schedule_steps_used=schedule_steps_mapping,
             learning_rates=learning_rate_mapping,
@@ -339,8 +341,18 @@ class InnerLoopRecorder:
 
     @property
     def values(self) -> list[float]:
-        """Return all per-iteration objective values, flattened by run."""
+        """Return explicit evaluations when available, otherwise optimizer estimates."""
         return [iteration.value for run in self.runs for iteration in run.iterations]
+
+    @property
+    def optimizer_estimates(self) -> list[float]:
+        """Return all optimizer objective estimates, flattened by run."""
+        return [float(iteration.optimizer_estimate) for run in self.runs for iteration in run.iterations]
+
+    @property
+    def evaluation_values(self) -> list[float | None]:
+        """Return all explicit updated-point evaluations, flattened by run."""
+        return [None if iteration.evaluation_value is None else float(iteration.evaluation_value) for run in self.runs for iteration in run.iterations]
 
     @property
     def params(self) -> list[np.ndarray]:
@@ -487,7 +499,7 @@ class InnerLoopRecorder:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable representation of the recorder."""
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "record_initial_value": self.record_initial_value,
             "record_gradients": self.record_gradients,
             "extra_evaluation_frequency": self.extra_evaluation_frequency,
@@ -509,6 +521,8 @@ class InnerLoopRecorder:
             "nfev": int(record.nfev),
             "params": np.asarray(record.params, dtype=float).tolist(),
             "value": float(record.value),
+            "optimizer_estimate": float(record.optimizer_estimate),
+            "evaluation_value": None if record.evaluation_value is None else float(record.evaluation_value),
             "stepsize": float(record.stepsize),
             "accepted": bool(record.accepted),
             "gradient": None
