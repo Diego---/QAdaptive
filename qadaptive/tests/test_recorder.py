@@ -3,6 +3,7 @@ import json
 import matplotlib
 import numpy as np
 import pytest
+from typing import get_args, get_type_hints
 
 matplotlib.use("Agg")
 
@@ -314,3 +315,12 @@ def test_recorder_records_serializes_and_plots_parameter_schedules():
 
     assert lr_figure is not None
     assert c_figure is not None
+
+
+def test_plot_objective_source_annotation_lists_supported_modes():
+    hints = get_type_hints(InnerLoopRecorder.plot_objective)
+    assert set(get_args(hints["source"])) == {
+        "auto",
+        "evaluation",
+        "optimizer_estimate",
+    }

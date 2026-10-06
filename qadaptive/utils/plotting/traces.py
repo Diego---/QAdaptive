@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import numpy as np
 
@@ -10,7 +10,16 @@ from qadaptive.outer.outer_loop import OuterStepResult
 from qadaptive.training.history import TrainingRunRecord
 
 
-ObjectiveSource = Literal["auto", "evaluation", "optimizer_estimate"]
+ObjectiveSource: TypeAlias = Literal[
+    "auto",
+    "evaluation",
+    "optimizer_estimate",
+]
+
+ResolvedObjectiveSource: TypeAlias = Literal[
+    "evaluation",
+    "optimizer_estimate",
+]
 
 
 @dataclass
@@ -41,9 +50,13 @@ class TrainingRunTrace:
         Parameter values for the run, with shape ``(num_points, num_parameters)``.
         If `include_initial=True` in the builder, the first row is the initial point.
     values : np.ndarray
-        Objective values for the run, with shape ``(num_points,)``.
-        If `include_initial=True`, the first entry is the initial objective value
-        or `missing_initial_value` if it was not stored.
+        Objective values selected for this trace and aligned to the same
+        parameter-point grid as ``params``.
+    objective_source : {"evaluation", "optimizer_estimate"}
+        Resolved source of ``values``. ``"evaluation"`` denotes values
+        explicitly evaluated at the corresponding parameter points.
+        ``"optimizer_estimate"`` denotes optimizer estimates aligned to the
+        pre-update points they describe.
     stepsizes : np.ndarray
         Step sizes for the run, with shape ``(num_points,)``.
         If `include_initial=True`, the first entry is `np.nan`.
@@ -68,7 +81,7 @@ class TrainingRunTrace:
     param_names: list[str]
     params: np.ndarray
     values: np.ndarray
-    objective_source: Literal["evaluation", "optimizer_estimate"]
+    objective_source: ResolvedObjectiveSource
     stepsizes: np.ndarray
     extra_values: np.ndarray
     extra_stds: np.ndarray
@@ -116,8 +129,26 @@ def _iteration_param_matrix(record: TrainingRunRecord) -> np.ndarray:
 def _resolve_objective_source(
     records: Sequence[TrainingRunRecord],
     source: ObjectiveSource,
-) -> Literal["evaluation", "optimizer_estimate"]:
-    """Resolve which objective quantity should be plotted."""
+) -> ResolvedObjectiveSource:
+    """
+    Resolve the requested objective-data source.
+
+    Parameters
+    ----------
+    records : Sequence[TrainingRunRecord]
+        Training runs whose recorded objective data will be plotted.
+    source : {"auto", "evaluation", "optimizer_estimate"}
+        Requested source mode. ``"auto"`` uses explicit evaluations only
+        when every recorded update has one; otherwise it uses optimizer
+        estimates consistently. ``"evaluation"`` selects explicit
+        parameter-point evaluations. ``"optimizer_estimate"`` selects the
+        optimizer estimate associated with each pre-update point.
+
+    Returns
+    -------
+    {"evaluation", "optimizer_estimate"}
+        Resolved source used to build all traces.
+    """
     if source not in {"auto", "evaluation", "optimizer_estimate"}:
         raise ValueError(
             "objective_source must be one of "
@@ -287,11 +318,21 @@ def build_training_run_traces(
         Placeholder value used when `include_initial=True` but a run has no stored
         initial objective value. Defaults to `np.nan`.
     objective_source : {"auto", "evaluation", "optimizer_estimate"}, optional
-        Quantity used for the objective trace. Evaluation values are aligned to
-        updated parameter points and include the final explicit evaluation.
-        Optimizer estimates are aligned to the pre-update points they describe.
-        `"auto"` chooses evaluations only when every recorded update has one;
-        otherwise it chooses optimizer estimates.
+        Objective-data source used to populate ``TrainingRunTrace.values``.
+
+        - ``"auto"`` selects ``"evaluation"`` only when every recorded update
+          in every run has an explicit evaluation. Otherwise the complete trace
+          uses ``"optimizer_estimate"`` so objective provenance is not mixed.
+        - ``"evaluation"`` uses values explicitly evaluated at recorded
+          parameter points. Missing per-step evaluations are represented by
+          ``np.nan``; the mandatory final objective evaluation is used for the
+          final parameter point.
+        - ``"optimizer_estimate"`` uses the optimizer estimate associated
+          with the point before each update. Values are aligned to those
+          pre-update parameter points, and no estimate is invented for the
+          final updated point.
+
+        Defaults to ``"auto"``.
 
     Returns
     -------

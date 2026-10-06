@@ -1,4 +1,6 @@
 from .traces import (
+    ObjectiveSource,
+    ResolvedObjectiveSource,
     TrainingRunTrace,
     build_training_run_traces,
 )
@@ -13,6 +15,8 @@ from .parameter_plots import (
 )
 
 __all__ = [
+    "ObjectiveSource",
+    "ResolvedObjectiveSource",
     "TrainingRunTrace",
     "build_training_run_traces",
     "build_parameter_series",

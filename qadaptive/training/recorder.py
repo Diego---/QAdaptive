@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .history import IterationRecord, TrainingRunRecord
+from qadaptive.utils.plotting.traces import ObjectiveSource, TrainingRunTrace
 
 
 def _nominal_and_std(value: Any) -> tuple[float, float | None]:
@@ -403,9 +404,36 @@ class InnerLoopRecorder:
         *,
         include_initial: bool = True,
         missing_initial_value: float = np.nan,
-        objective_source: str = "auto",
-    ):
-        """Build plot-ready traces for all recorded runs."""
+        objective_source: ObjectiveSource = "auto",
+    ) -> list[TrainingRunTrace]:
+        """
+        Build plot-ready traces for all recorded runs.
+
+        Parameters
+        ----------
+        include_initial : bool, optional
+            Whether to include the initial parameter point of each training
+            run. Defaults to ``True``.
+        missing_initial_value : float, optional
+            Placeholder used when an initial objective value was not recorded.
+            Defaults to ``np.nan``.
+        objective_source : {"auto", "evaluation", "optimizer_estimate"}, optional
+            Objective-data source used for the trace values.
+
+            - ``"auto"`` uses explicit evaluations only when every recorded
+              update has one; otherwise it uses optimizer estimates throughout.
+            - ``"evaluation"`` uses values explicitly evaluated at the
+              recorded parameter points.
+            - ``"optimizer_estimate"`` uses optimizer estimates aligned to
+              the pre-update points they describe.
+
+            Defaults to ``"auto"``.
+
+        Returns
+        -------
+        list[TrainingRunTrace]
+            Plot-ready traces with the selected objective provenance.
+        """
         from qadaptive.utils.plotting.traces import build_training_run_traces
 
         return build_training_run_traces(
@@ -418,11 +446,45 @@ class InnerLoopRecorder:
     def plot_objective(
         self,
         *,
-        source: str = "auto",
+        source: ObjectiveSource = "auto",
         include_initial: bool = True,
         **kwargs,
     ):
-        """Plot objective history from explicit evaluations or optimizer estimates."""
+        """
+        Plot the recorded inner-loop objective history.
+
+        Parameters
+        ----------
+        source : {"auto", "evaluation", "optimizer_estimate"}, optional
+            Select which recorded objective quantity is plotted.
+
+            - ``"auto"`` uses explicit evaluations only when every recorded
+              update in every run has one. If any update lacks an explicit
+              evaluation, optimizer estimates are used for the complete trace.
+              This avoids silently mixing data sources.
+            - ``"evaluation"`` plots objective values explicitly evaluated at
+              the recorded parameter points. Per-step values normally come
+              from ``evaluation_loss`` when one was supplied to training.
+              Missing evaluations appear as gaps, while the mandatory final
+              objective evaluation is shown at the final parameter point.
+            - ``"optimizer_estimate"`` plots the optimizer objective estimate
+              for each update. The estimate is aligned to the pre-update
+              parameter point from which that update was computed; the final
+              updated point therefore has no optimizer estimate.
+
+            Defaults to ``"auto"``.
+        include_initial : bool, optional
+            Whether to include the initial parameter point of each training
+            run. Defaults to ``True``.
+        **kwargs
+            Additional keyword arguments forwarded to
+            ``plot_cost_with_outer_boundaries``.
+
+        Returns
+        -------
+        tuple
+            Matplotlib ``(figure, axes)`` pair.
+        """
         from qadaptive.utils.plotting.objective_plots import (
             plot_cost_with_outer_boundaries,
         )
