@@ -200,7 +200,7 @@ schedule = [
 # --- Run the adaptive loop --------------------------------------------------
 results = experiment.run_outer_loop(
     loss_function=vqe_cost,
-    loss_next=energy,
+    evaluation_loss=energy,
     plan_schedule=schedule,
     outer_iterations=len(schedule),
     train_iterations=TRAIN_ITERATIONS,
@@ -221,7 +221,7 @@ final_circuit = experiment.ansatz
 final_params = experiment.get_current_parameter_dict()
 ```
 
-`loss_next=energy` evaluates the updated parameter point for the recorded objective values. `trainer_iteration_reset=None` continues the SPSA iteration schedule across training phases. Parameter memory reuses values for parameters that remain active, newly introduced parameters start at zero.
+`evaluation_loss=energy` explicitly evaluates every accepted updated parameter point with `energy`. Leaving `evaluation_loss=None` performs no additional per-step evaluation; the recorder keeps the optimizer estimate instead. The final parameter point is always evaluated explicitly, using `evaluation_loss` when provided and otherwise `loss_function`. `trainer_iteration_reset=None` continues the SPSA iteration schedule across training phases. Parameter memory reuses values for parameters that remain active, newly introduced parameters start at zero.
 
 The `cx_identity` block becomes the identity at zero rotation angles. Zero initialisation preserves the current circuit's action for such blocks, this property depends on the selected block.
 

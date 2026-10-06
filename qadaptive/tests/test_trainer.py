@@ -57,11 +57,8 @@ class DummyOptimizer(StepwiseOptimizer):
         self,
         x: np.ndarray,
         loss_function,
-        loss_next=None,
         **kwargs,
     ) -> tuple[bool, np.ndarray, float | None, np.ndarray | None, float | None]:
-        del loss_next
-
         x = np.asarray(x, dtype=float)
         fx_estimate = float(loss_function(x, **kwargs))
         gradient_estimate = np.ones_like(x, dtype=float)
@@ -210,12 +207,93 @@ def test_train_one_time_records_training_run_history():
     assert record.iterations[0].iteration == 1
     assert record.iterations[0].nfev == 1
     assert np.allclose(record.iterations[0].params, np.array([0.9, 0.9]))
+    assert record.iterations[0].optimizer_estimate == pytest.approx(2.0)
+    assert record.iterations[0].evaluation_value is None
     assert record.iterations[0].value == pytest.approx(2.0)
 
     assert record.iterations[1].iteration == 2
     assert record.iterations[1].nfev == 2
     assert np.allclose(record.iterations[1].params, np.array([0.8, 0.8]))
+    assert record.iterations[1].optimizer_estimate == pytest.approx(1.62)
+    assert record.iterations[1].evaluation_value is None
     assert record.iterations[1].value == pytest.approx(1.62)
+
+
+def test_evaluation_loss_records_updated_point_values():
+    optimizer = DummyOptimizer(step_size=0.1)
+    recorder = InnerLoopRecorder(record_gradients=False)
+    trainer = InnerLoopTrainer(optimizer=optimizer, recorder=recorder)
+    ansatz = build_parameterized_ansatz()
+
+    result = trainer.train_one_time(
+        ansatz=ansatz,
+        loss_function=quadratic_loss,
+        evaluation_loss=quadratic_loss,
+        initial_point=np.array([1.0, 1.0]),
+        iterations=2,
+    )
+
+    first, second = recorder.last_run.iterations
+
+    assert np.allclose(first.params, np.array([0.9, 0.9]))
+    assert first.optimizer_estimate == pytest.approx(2.0)
+    assert first.evaluation_value == pytest.approx(1.62)
+    assert first.value == pytest.approx(1.62)
+
+    assert np.allclose(second.params, np.array([0.8, 0.8]))
+    assert second.optimizer_estimate == pytest.approx(1.62)
+    assert second.evaluation_value == pytest.approx(1.28)
+    assert second.value == pytest.approx(1.28)
+    assert result.fun == pytest.approx(1.28)
+
+
+def test_evaluation_loss_none_only_adds_final_evaluation():
+    calls = 0
+
+    def counting_loss(x, ansatz, **kwargs):
+        nonlocal calls
+        del ansatz, kwargs
+        calls += 1
+        return float(np.sum(np.asarray(x, dtype=float) ** 2))
+
+    trainer = InnerLoopTrainer(
+        optimizer=DummyOptimizer(step_size=0.1),
+        recorder=InnerLoopRecorder(record_gradients=False),
+    )
+
+    trainer.train_one_time(
+        ansatz=build_parameterized_ansatz(),
+        loss_function=counting_loss,
+        initial_point=np.array([1.0, 1.0]),
+        iterations=2,
+    )
+
+    assert calls == 3
+
+
+def test_custom_evaluation_loss_is_kept_separate_from_optimizer_estimate():
+    recorder = InnerLoopRecorder(record_gradients=False)
+    trainer = InnerLoopTrainer(
+        optimizer=DummyOptimizer(step_size=0.1),
+        recorder=recorder,
+    )
+    ansatz = build_parameterized_ansatz()
+
+    def shifted_evaluation(x, ansatz, **kwargs):
+        return quadratic_loss(x, ansatz, **kwargs) + 100.0
+
+    result = trainer.train_one_time(
+        ansatz=ansatz,
+        loss_function=quadratic_loss,
+        evaluation_loss=shifted_evaluation,
+        initial_point=np.array([1.0, 1.0]),
+        iterations=1,
+    )
+
+    iteration = recorder.last_run.iterations[0]
+    assert iteration.optimizer_estimate == pytest.approx(2.0)
+    assert iteration.evaluation_value == pytest.approx(101.62)
+    assert result.fun == pytest.approx(101.62)
 
 
 def test_train_one_time_reuses_the_same_recorder_across_runs():

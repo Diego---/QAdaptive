@@ -23,7 +23,8 @@ def test_recorder_owns_complete_multi_run_history():
         iteration=1,
         nfev=3,
         params=[0.8, -0.7],
-        value=1.5,
+        optimizer_estimate=1.5,
+        evaluation_value=1.4,
         stepsize=0.2,
         accepted=True,
         gradient=[1.0, -0.5],
@@ -44,7 +45,9 @@ def test_recorder_owns_complete_multi_run_history():
     assert first.accepted_outer_step is True
     assert second.accepted_outer_step is False
     assert second.note == "Rejected and rolled back."
-    assert recorder.values == [1.5]
+    assert recorder.values == [1.4]
+    assert recorder.optimizer_estimates == [1.5]
+    assert recorder.evaluation_values == [1.4]
     assert recorder.nfevs == [3]
     assert recorder.gradient_norms == [pytest.approx(np.sqrt(1.25))]
 
@@ -87,7 +90,7 @@ def test_recorder_plots_and_saves_without_external_trace_arrays(tmp_path):
         iteration=1,
         nfev=1,
         params=[0.5],
-        value=0.25,
+        optimizer_estimate=0.25,
         stepsize=0.5,
         accepted=True,
         gradient=[1.0],
@@ -106,8 +109,12 @@ def test_recorder_plots_and_saves_without_external_trace_arrays(tmp_path):
     output = recorder.save(tmp_path / "recorder.json")
     payload = json.loads(output.read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == 1
-    assert payload["runs"][0]["iterations"][0]["nfev"] == 1
+    assert payload["schema_version"] == 2
+    saved_iteration = payload["runs"][0]["iterations"][0]
+    assert saved_iteration["nfev"] == 1
+    assert saved_iteration["optimizer_estimate"] == pytest.approx(0.25)
+    assert saved_iteration["evaluation_value"] is None
+    assert saved_iteration["value"] == pytest.approx(0.25)
     assert payload["runs"][0]["final_params"] == [0.5]
 
 
@@ -140,7 +147,7 @@ def test_recorder_records_serializes_and_plots_parameter_schedules():
         iteration=1,
         nfev=2,
         params=[0.1, -0.1],
-        value=0.5,
+        optimizer_estimate=0.5,
         stepsize=0.1,
         accepted=True,
         schedule_steps_used={"θ_0": 0, "θ_1": 3},
@@ -151,7 +158,7 @@ def test_recorder_records_serializes_and_plots_parameter_schedules():
         iteration=2,
         nfev=4,
         params=[0.2, -0.2],
-        value=0.4,
+        optimizer_estimate=0.4,
         stepsize=0.1,
         accepted=True,
         schedule_steps_used={"θ_0": 1, "θ_1": 4},

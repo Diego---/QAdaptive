@@ -257,7 +257,6 @@ def test_process_update_uses_parameter_dependent_learning_rates():
         x=x,
         fx=0.0,
         fun=lambda x: float(np.sum(x**2)),
-        fun_next=None,
     )
 
     expected_learning_rates = np.array([
