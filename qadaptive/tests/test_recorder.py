@@ -64,7 +64,7 @@ def test_recorder_evaluates_extra_objective_at_configured_frequency():
             iteration=iteration,
             nfev=iteration,
             params=[value],
-            value=value**2,
+            optimizer_estimate=value**2,
             stepsize=0.1,
             accepted=True,
         )
@@ -117,6 +117,126 @@ def test_recorder_plots_and_saves_without_external_trace_arrays(tmp_path):
     assert saved_iteration["value"] == pytest.approx(0.25)
     assert payload["runs"][0]["final_params"] == [0.5]
 
+
+def test_objective_plot_evaluation_source_uses_updated_points_and_final_value():
+    recorder = InnerLoopRecorder()
+    recorder.start_run(
+        param_names=["theta"],
+        initial_point=[1.0],
+        initial_value=1.0,
+    )
+    recorder(
+        iteration=1,
+        nfev=2,
+        params=[0.8],
+        optimizer_estimate=1.0,
+        evaluation_value=0.64,
+        stepsize=0.2,
+        accepted=True,
+    )
+    recorder(
+        iteration=2,
+        nfev=4,
+        params=[0.6],
+        optimizer_estimate=0.64,
+        evaluation_value=0.36,
+        stepsize=0.2,
+        accepted=True,
+    )
+    recorder.finish_run(final_params=[0.6], final_value=0.35)
+
+    figure, axes = recorder.plot_objective(source="evaluation")
+    line = next(
+        line for line in axes.lines
+        if line.get_label() == "Explicit evaluation"
+    )
+
+    np.testing.assert_array_equal(line.get_xdata(), [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(line.get_ydata(), [1.0, 0.64, 0.35])
+    assert figure is not None
+
+
+def test_objective_plot_optimizer_estimate_is_aligned_to_pre_update_points():
+    recorder = InnerLoopRecorder()
+    recorder.start_run(
+        param_names=["theta"],
+        initial_point=[1.0],
+        initial_value=1.0,
+    )
+    recorder(
+        iteration=1,
+        nfev=2,
+        params=[0.8],
+        optimizer_estimate=1.0,
+        stepsize=0.2,
+        accepted=True,
+    )
+    recorder(
+        iteration=2,
+        nfev=4,
+        params=[0.6],
+        optimizer_estimate=0.64,
+        stepsize=0.2,
+        accepted=True,
+    )
+    recorder.finish_run(final_params=[0.6], final_value=0.36)
+
+    figure, axes = recorder.plot_objective(source="optimizer_estimate")
+    line = next(
+        line for line in axes.lines
+        if line.get_label() == "Optimizer estimate"
+    )
+
+    x = np.asarray(line.get_xdata(), dtype=float)
+    y = np.asarray(line.get_ydata(), dtype=float)
+    finite = np.isfinite(y)
+
+    np.testing.assert_array_equal(x[finite], [0.0, 1.0])
+    np.testing.assert_allclose(y[finite], [1.0, 0.64])
+    assert np.isnan(y[-1])
+    assert figure is not None
+
+
+def test_objective_plot_auto_selects_source_from_recorded_data():
+    estimates_only = InnerLoopRecorder()
+    estimates_only.start_run(param_names=["theta"], initial_point=[1.0])
+    estimates_only(
+        iteration=1,
+        nfev=2,
+        params=[0.8],
+        optimizer_estimate=1.0,
+        stepsize=0.2,
+        accepted=True,
+    )
+    estimates_only.finish_run(final_params=[0.8], final_value=0.64)
+
+    _, axes = estimates_only.plot_objective(source="auto")
+    assert axes.lines[0].get_label() == "Optimizer estimate"
+
+    evaluated = InnerLoopRecorder()
+    evaluated.start_run(param_names=["theta"], initial_point=[1.0])
+    evaluated(
+        iteration=1,
+        nfev=3,
+        params=[0.8],
+        optimizer_estimate=1.0,
+        evaluation_value=0.64,
+        stepsize=0.2,
+        accepted=True,
+    )
+    evaluated.finish_run(final_params=[0.8], final_value=0.63)
+
+    _, axes = evaluated.plot_objective(source="auto")
+    assert axes.lines[0].get_label() == "Explicit evaluation"
+
+
+def test_objective_plot_rejects_unknown_source():
+    recorder = InnerLoopRecorder()
+    recorder.start_run(param_names=["theta"], initial_point=[1.0])
+    recorder.finish_run(final_params=[1.0], final_value=1.0)
+
+    with pytest.raises(ValueError, match="objective_source"):
+        recorder.plot_objective(source="mystery")
 
 def test_recorder_retains_partial_run_after_abort():
     recorder = InnerLoopRecorder()

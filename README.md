@@ -340,7 +340,10 @@ experiment.plot_outer_history(ylabel="Energy")
 experiment.plot_architecture_evolution(indices=[0, -1])
 experiment.plot_complexity_evolution()
 
-experiment.recorder.plot_objective()
+# Select the objective provenance explicitly, or use "auto".
+experiment.recorder.plot_objective(source="auto")
+# experiment.recorder.plot_objective(source="evaluation")
+# experiment.recorder.plot_objective(source="optimizer_estimate")
 experiment.recorder.plot_parameters()
 experiment.recorder.plot_parameter_heatmap(normalize=True)
 
@@ -355,6 +358,8 @@ fig.savefig("outer_history.pdf", bbox_inches="tight")
 ```
 
 `plot_outer_history()` shows retained costs and separate markers for rejected trial costs. `plot_complexity_evolution()` applies the same distinction to parameter and two-qubit-instruction counts.
+
+`recorder.plot_objective(source=...)` distinguishes objective provenance. `"evaluation"` plots values explicitly evaluated at the recorded parameter points and includes the mandatory final evaluation. `"optimizer_estimate"` plots optimizer estimates at the pre-update points they describe. `"auto"` uses evaluations only when every recorded step has one; otherwise it uses optimizer estimates.
 
 `plot_architecture_evolution()` draws accepted circuit snapshots. Its `indices` select positions in `accepted_ansatz_history`, not outer iteration numbers; `[0, -1]` selects the first and last recorded accepted states.
 

@@ -403,6 +403,7 @@ class InnerLoopRecorder:
         *,
         include_initial: bool = True,
         missing_initial_value: float = np.nan,
+        objective_source: str = "auto",
     ):
         """Build plot-ready traces for all recorded runs."""
         from qadaptive.utils.plotting.traces import build_training_run_traces
@@ -411,16 +412,26 @@ class InnerLoopRecorder:
             self.runs,
             include_initial=include_initial,
             missing_initial_value=missing_initial_value,
+            objective_source=objective_source,
         )
 
-    def plot_objective(self, *, include_initial: bool = True, **kwargs):
-        """Plot the objective history across all inner-loop runs."""
+    def plot_objective(
+        self,
+        *,
+        source: str = "auto",
+        include_initial: bool = True,
+        **kwargs,
+    ):
+        """Plot objective history from explicit evaluations or optimizer estimates."""
         from qadaptive.utils.plotting.objective_plots import (
             plot_cost_with_outer_boundaries,
         )
 
         return plot_cost_with_outer_boundaries(
-            self.traces(include_initial=include_initial),
+            self.traces(
+                include_initial=include_initial,
+                objective_source=source,
+            ),
             **kwargs,
         )
 
