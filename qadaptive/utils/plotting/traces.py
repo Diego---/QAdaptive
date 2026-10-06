@@ -127,13 +127,12 @@ def _resolve_objective_source(
     if source != "auto":
         return source
 
-    nonempty_runs = [record for record in records if record.iterations]
-    if nonempty_runs and all(
+    if all(
         all(
             iteration.evaluation_value is not None
             for iteration in record.iterations
         )
-        for record in nonempty_runs
+        for record in records
     ):
         return "evaluation"
 
@@ -287,6 +286,12 @@ def build_training_run_traces(
     missing_initial_value : float, optional
         Placeholder value used when `include_initial=True` but a run has no stored
         initial objective value. Defaults to `np.nan`.
+    objective_source : {"auto", "evaluation", "optimizer_estimate"}, optional
+        Quantity used for the objective trace. Evaluation values are aligned to
+        updated parameter points and include the final explicit evaluation.
+        Optimizer estimates are aligned to the pre-update points they describe.
+        `"auto"` chooses evaluations only when every recorded update has one;
+        otherwise it chooses optimizer estimates.
 
     Returns
     -------
