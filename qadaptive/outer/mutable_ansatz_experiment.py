@@ -894,8 +894,8 @@ class MutableAnsatzExperiment:
         Parameters
         ----------
         loss_function : Callable[[np.ndarray], float]
-            Objective function used for training and, when needed, for evaluating
-            the current ansatz.
+            Objective function used by the inner optimizer. It is also used for
+            final evaluation and outer acceptance when `evaluation_loss` is None.
         plan : OuterStepPlan
             Concrete structural proposal to execute.
         train_iterations : int, optional
@@ -907,7 +907,9 @@ class MutableAnsatzExperiment:
             point used for training. The signature of the generator should be
             `generator(iteration: int) -> np.ndarray`.
         evaluation_loss : Callable[[np.ndarray], float] | None, optional
-            Optional objective evaluated at accepted updated parameter points during training.
+            Optional objective evaluated at accepted updated parameter points during
+            training. When provided, its final value is also used as the reported
+            training result and for outer-loop acceptance.
         train_after_plan : bool, optional
             Whether to retrain after executing the plan.
         trainer_iteration_reset : int | None,  optional
@@ -1249,7 +1251,8 @@ class MutableAnsatzExperiment:
         Parameters
         ----------
         loss_function : Callable[[np.ndarray], float]
-            Objective function used for training and acceptance decisions.
+            Objective function used by the inner optimizer and, when
+            `evaluation_loss` is None, for final costs and acceptance decisions.
         plan_schedule : list[OuterPlanBuilder]
             Ordered list of configured plan builders. At outer iteration `n`, the
             selected builder is called with the current experiment state to construct

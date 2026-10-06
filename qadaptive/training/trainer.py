@@ -263,6 +263,7 @@ class InnerLoopTrainer:
 
         start = time()
         k = 0
+        last_evaluation_value: float | None = None
 
         try:
             self.optimizer.initialize(
@@ -334,6 +335,9 @@ class InnerLoopTrainer:
                 elif fx_next is not None:
                     evaluation_value = float(fx_next)
 
+                if evaluation_loss is not None and evaluation_value is not None:
+                    last_evaluation_value = float(evaluation_value)
+
                 step_size = (
                     0.0
                     if self.optimizer.last_stepsize is None
@@ -395,9 +399,18 @@ class InnerLoopTrainer:
             result = OptimizerResult()
             result.x = x
 
-            final_objective = loss_function if evaluation_loss is None else evaluation_loss
-            logger.info("Calculating objective value for final parameters.")
-            result.fun = float(final_objective(x, ansatz=ansatz, **kwargs))
+            if evaluation_loss is None:
+                logger.info("Calculating objective value for final parameters.")
+                result.fun = float(loss_function(x, ansatz=ansatz, **kwargs))
+            elif last_evaluation_value is not None:
+                logger.info(
+                    "Reusing explicit evaluation already recorded at final parameters."
+                )
+                result.fun = float(last_evaluation_value)
+            else:
+                logger.info("Calculating evaluation objective for final parameters.")
+                result.fun = float(evaluation_loss(x, ansatz=ansatz, **kwargs))
+
             logger.info("Final objective value: %s", result.fun)
 
             result.nfev = self.optimizer.nfev

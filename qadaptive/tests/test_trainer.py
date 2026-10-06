@@ -271,6 +271,31 @@ def test_evaluation_loss_none_only_adds_final_evaluation():
     assert calls == 3
 
 
+def test_evaluation_loss_reuses_last_step_evaluation_for_final_result():
+    evaluation_calls = 0
+
+    def evaluation_loss(x, ansatz, **kwargs):
+        nonlocal evaluation_calls
+        evaluation_calls += 1
+        return quadratic_loss(x, ansatz, **kwargs)
+
+    trainer = InnerLoopTrainer(
+        optimizer=DummyOptimizer(step_size=0.1),
+        recorder=InnerLoopRecorder(record_gradients=False),
+    )
+
+    result = trainer.train_one_time(
+        ansatz=build_parameterized_ansatz(),
+        loss_function=quadratic_loss,
+        evaluation_loss=evaluation_loss,
+        initial_point=np.array([1.0, 1.0]),
+        iterations=2,
+    )
+
+    assert evaluation_calls == 2
+    assert result.fun == pytest.approx(1.28)
+
+
 def test_custom_evaluation_loss_is_kept_separate_from_optimizer_estimate():
     recorder = InnerLoopRecorder(record_gradients=False)
     trainer = InnerLoopTrainer(

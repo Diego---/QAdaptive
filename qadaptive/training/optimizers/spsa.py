@@ -1362,17 +1362,22 @@ class SPSA(StepwiseOptimizer):
 
             x = x_next
 
-            if self.callback is not None:
-                if fx_next is None:
-                    self._nfev += 1
-                    fx_cb = float(fun(x, **kwargs))
-                else:
-                    fx_cb = float(fx_next)
+            observed_value = fx_next
+            if (
+                observed_value is None
+                and (
+                    self.callback is not None
+                    or self.termination_checker is not None
+                )
+            ):
+                self._nfev += 1
+                observed_value = float(fun(x, **kwargs))
 
+            if self.callback is not None:
                 self.callback(
                     self._nfev,
                     x,
-                    fx_cb,
+                    float(observed_value),
                     0.0 if self.last_stepsize is None else self.last_stepsize,
                     True,
                 )
@@ -1383,11 +1388,10 @@ class SPSA(StepwiseOptimizer):
                     last_steps.popleft()
 
             if self.termination_checker is not None:
-                fx_check = fx_estimate if fx_next is None else fx_next
                 if self.termination_checker(
                     self._nfev,
                     x,
-                    float(fx_check),
+                    float(observed_value),
                     0.0 if self.last_stepsize is None else self.last_stepsize,
                     True,
                 ):
