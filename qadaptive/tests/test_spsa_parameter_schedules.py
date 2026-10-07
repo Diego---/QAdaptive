@@ -13,7 +13,8 @@ def make_optimizer():
     return SPSA(
         learning_rate=0.1,
         perturbation=0.1,
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
     
 def test_parameter_schedule_steps_initialize_at_zero():
@@ -125,7 +126,8 @@ def test_restart_parameter_schedules_resets_all_active_parameters():
 
 def test_parameter_schedule_values_follow_individual_parameter_steps():
     optimizer = SPSA(
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.set_power_series_hyperparameters(
@@ -148,7 +150,8 @@ def test_parameter_schedule_values_follow_individual_parameter_steps():
         "θ_2": 8,
     }
 
-    learning_rates, perturbations = optimizer._get_parameter_schedule_values()
+    learning_rates = optimizer._get_parameter_learning_rates()
+    perturbations = optimizer._get_parameter_perturbations()
 
     expected_learning_rates = np.array([
         0.8 / (1.0 + 1) ** 0.5,
@@ -179,7 +182,8 @@ def test_parameter_dependent_schedules_reject_second_order_spsa():
         SPSA(
             learning_rate=0.1,
             perturbation=0.1,
-            parameter_dependent_schedules=True,
+            parameter_dependent_lr_schedule=True,
+            parameter_dependent_perturbation_schedule=True,
             second_order=True,
         )
 
@@ -187,7 +191,8 @@ def test_point_sample_supports_parameter_dependent_perturbations():
     optimizer = SPSA(
         learning_rate=0.1,
         perturbation=0.1,
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     evaluated_points = []
@@ -227,7 +232,8 @@ def test_point_sample_supports_parameter_dependent_perturbations():
 
 def test_process_update_uses_parameter_dependent_learning_rates():
     optimizer = SPSA(
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.set_power_series_hyperparameters(
@@ -279,7 +285,8 @@ def test_parameter_dependent_step_uses_current_schedule_then_advances(
     monkeypatch,
 ):
     optimizer = SPSA(
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.set_power_series_hyperparameters(
@@ -358,7 +365,8 @@ def test_parameter_birth_outer_iterations_are_preserved_for_survivors():
     
 def test_parameter_birth_modulation_scales_new_parameter_schedules():
     optimizer = SPSA(
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.set_power_series_hyperparameters(
@@ -388,9 +396,8 @@ def test_parameter_birth_modulation_scales_new_parameter_schedules():
         outer_iteration=3,
     )
 
-    learning_rates, perturbations = (
-        optimizer._get_parameter_schedule_values()
-    )
+    learning_rates = optimizer._get_parameter_learning_rates()
+    perturbations = optimizer._get_parameter_perturbations()
 
     np.testing.assert_allclose(
         learning_rates,

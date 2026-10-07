@@ -42,7 +42,8 @@ def make_parameter_schedule_experiment():
     optimizer = SPSA(
         learning_rate=0.1,
         perturbation=0.1,
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     trainer = InnerLoopTrainer(optimizer)
@@ -255,7 +256,8 @@ def test_restore_parameter_schedules_restores_steps_and_active_parameters():
     optimizer = SPSA(
         learning_rate=0.1,
         perturbation=0.1,
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.initialize(
