@@ -43,7 +43,8 @@ class SPSA(StepwiseOptimizer):
         learning_rate: float | np.ndarray | Callable[..., Iterator[float]] | None = None,
         perturbation: float | np.ndarray | Callable[..., Iterator[float]] | None = None,
         start_point: int = 0,
-        parameter_dependent_schedules: bool = False,
+        parameter_dependent_lr_schedule: bool = False,
+        parameter_dependent_perturbation_schedule: bool = False,
         last_avg: int = 1,
         resamplings: int | dict[int, int] = 1,
         perturbation_dims: int | None = None,
@@ -74,8 +75,12 @@ class SPSA(StepwiseOptimizer):
             Perturbation schedule.
         start_point : int, optional
             Default schedule offset for a fresh initialization.
-        parameter_dependent_schedules : bool, optional
-            If True, learning-rate and perturbation schedules are tracked independently
+        parameter_dependent_lr_schedules : bool, optional
+            If True, the learning-rate schedules is tracked independently
+            for each parameter. Newly introduced parameters start from schedule step zero,
+            while surviving parameters retain their current schedule step. Defaults to False.
+        parameter_dependent_perturbation_schedules : bool, optional
+            If True, the perturbation strength schedule is tracked independently
             for each parameter. Newly introduced parameters start from schedule step zero,
             while surviving parameters retain their current schedule step. Defaults to False.
         last_avg : int, optional
@@ -110,9 +115,9 @@ class SPSA(StepwiseOptimizer):
         """
         super().__init__(callback=callback, termination_checker=termination_checker)
         
-        if parameter_dependent_schedules and second_order:
+        if parameter_dependent_perturbation_schedule and second_order:
             raise ValueError(
-                "Parameter-dependent schedules are currently supported only for "
+                "Parameter-dependent perturbation schedules are currently supported only for "
                 "first-order SPSA."
             )
 
@@ -124,7 +129,8 @@ class SPSA(StepwiseOptimizer):
         self.learning_rate = learning_rate
         self.perturbation = perturbation
         self.start_point = start_point
-        self.parameter_dependent_schedules = parameter_dependent_schedules
+        self.parameter_dependent_lr_schedule = parameter_dependent_lr_schedule
+        self.parameter_dependent_perturbation_schedule = parameter_dependent_perturbation_schedule
 
         self.last_avg = last_avg
         self.resamplings = resamplings
@@ -205,7 +211,8 @@ class SPSA(StepwiseOptimizer):
             "learning_rate": learning_rate,
             "perturbation": perturbation,
             "start_point": self.start_point,
-            "parameter_dependent_schedules": self.parameter_dependent_schedules,
+            "parameter_dependent_lr_schedules": self.parameter_dependent_lr_schedule,
+            "parameter_dependent_perturbation_schedules": self.parameter_dependent_perturbation_schedule,
             "parameter_birth_learning_rate_exponent":
                 self._parameter_birth_learning_rate_exponent,
             "parameter_birth_perturbation_exponent":
@@ -221,7 +228,14 @@ class SPSA(StepwiseOptimizer):
             "callback": self.callback,
             "termination_checker": self.termination_checker,
         }
-        
+
+    @property
+    def uses_parameter_dependent_schedules(self) -> bool:
+        return (
+            self.parameter_dependent_lr_schedule
+            or self.parameter_dependent_perturbation_schedule
+        )
+
     @property
     def parameter_schedule_steps(self) -> dict[str, int]:
         """
@@ -424,14 +438,24 @@ class SPSA(StepwiseOptimizer):
             self.learning_rate,
         )
 
+        if self.parameter_dependent_lr_schedule:
+            n_start_lr = [self._parameter_schedule_steps[name] for name in self._active_parameter_names]
+        else:
+            n_start_lr = np.max(self._parameter_schedule_steps.values()) # oldest parameter step
+            
+        if self.parameter_dependent_perturbation_schedule:
+            n_start_perturbation = [self._parameter_schedule_steps[name] for name in self._active_parameter_names]
+        else:
+            n_start_perturbation = np.max(self._parameter_schedule_steps.values()) # oldest parameter step
+
         learning_rates = np.asarray(
             [
                 next(
                     get_eta(
-                        n_start=self._parameter_schedule_steps[name]
+                        n_start=n_start
                     )
                 )
-                for name in self._active_parameter_names
+                for n_start in n_start_lr
             ],
             dtype=float,
         )
@@ -440,10 +464,10 @@ class SPSA(StepwiseOptimizer):
             [
                 next(
                     get_eps(
-                        n_start=self._parameter_schedule_steps[name]
+                        n_start=n_start
                     )
                 )
-                for name in self._active_parameter_names
+                for n_start in n_start_perturbation
             ],
             dtype=float,
         )
