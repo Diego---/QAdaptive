@@ -239,7 +239,8 @@ parameter:
 ```python
 optimizer = SPSA(
     resamplings=1,
-    parameter_dependent_schedules=True,
+    parameter_dependent_lr_schedule=True,
+    parameter_dependent_perturbation_schedule=True,
 )
 optimizer.set_power_series_hyperparameters(**spsa_settings)
 ```
