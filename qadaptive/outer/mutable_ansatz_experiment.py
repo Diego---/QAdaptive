@@ -1777,7 +1777,7 @@ class MutableAnsatzExperiment:
         
         optimizer = self.trainer.optimizer
 
-        if getattr(optimizer, "parameter_dependent_schedules", False):
+        if getattr(optimizer, "uses_parameter_dependent_schedules", False):
             parameter_schedule_steps = optimizer.parameter_schedule_steps
             parameter_birth_outer_iterations = (
                 optimizer.parameter_birth_outer_iterations

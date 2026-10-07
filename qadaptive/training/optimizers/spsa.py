@@ -109,7 +109,7 @@ class SPSA(StepwiseOptimizer):
         Raises
         ------
         ValueError
-            If ``parameter_dependent_schedules=True`` together with
+            If ``parameter_dependent_perturbation_schedule=True`` together with
             ``second_order=True``, since parameter-dependent schedules are currently
             supported only for first-order SPSA.
         """
@@ -165,7 +165,6 @@ class SPSA(StepwiseOptimizer):
         self._last_parameter_schedule_steps_used: dict[str, int] | None = None
         self._last_parameter_learning_rates: dict[str, float] | None = None
         self._last_parameter_perturbations: dict[str, float] | None = None
-        self._pending_parameter_learning_rates: np.ndarray | None = None
 
         # 2-SPSA state
         self._smoothed_hessian: np.ndarray | None = None
@@ -211,8 +210,8 @@ class SPSA(StepwiseOptimizer):
             "learning_rate": learning_rate,
             "perturbation": perturbation,
             "start_point": self.start_point,
-            "parameter_dependent_lr_schedules": self.parameter_dependent_lr_schedule,
-            "parameter_dependent_perturbation_schedules": self.parameter_dependent_perturbation_schedule,
+            "parameter_dependent_lr_schedule": self.parameter_dependent_lr_schedule,
+            "parameter_dependent_perturbation_schedule": self.parameter_dependent_perturbation_schedule,
             "parameter_birth_learning_rate_exponent":
                 self._parameter_birth_learning_rate_exponent,
             "parameter_birth_perturbation_exponent":
@@ -343,7 +342,7 @@ class SPSA(StepwiseOptimizer):
             Mapping from active parameter names to the outer-loop iteration
             at which each parameter was first introduced.
         """
-        if not self.parameter_dependent_schedules:
+        if not self.uses_parameter_dependent_schedules:
             raise RuntimeError(
                 "Cannot restore parameter schedules when "
                 "parameter_dependent_schedules=False."
@@ -385,7 +384,6 @@ class SPSA(StepwiseOptimizer):
             birth_outer_iterations
         )
         self._active_parameter_names = tuple(schedule_steps)
-        self._pending_parameter_learning_rates = None
         
     def restart_parameter_schedules(self) -> None:
         """
@@ -394,7 +392,7 @@ class SPSA(StepwiseOptimizer):
         Each active parameter's schedule step is reset to zero. Parameter birth
         iterations are preserved, so birth-strength modulation is unchanged.
         """
-        if not self.parameter_dependent_schedules:
+        if not self.uses_parameter_dependent_schedules:
             raise RuntimeError(
                 "Cannot restart parameter schedules when "
                 "parameter_dependent_schedules=False."
@@ -404,74 +402,41 @@ class SPSA(StepwiseOptimizer):
             name: 0
             for name in self._active_parameter_names
         }
-        self._pending_parameter_learning_rates = None
         
-    def _get_parameter_schedule_values(
-        self,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Return the current learning rate and perturbation for each active parameter.
-
-        Each base schedule is evaluated at the parameter's own SPSA schedule step.
-        The resulting value is then modulated according to the outer-loop iteration
-        at which that parameter was introduced.
-
-        Returns
-        -------
-        tuple[np.ndarray, np.ndarray]
-            Learning-rate and perturbation vectors ordered according to
-            ``self._active_parameter_names``.
-        """
-        
+    def _validate_parameter_schedule_state(self) -> None:
         if not self._active_parameter_names:
             raise RuntimeError(
                 "Parameter-dependent SPSA schedules require active parameter identities."
             )
-            
-        if set(self._active_parameter_names) != set(self._parameter_schedule_steps):
+
+        if set(self._active_parameter_names) != set(
+            self._parameter_schedule_steps
+        ):
             raise RuntimeError(
                 "Active parameter identities and SPSA schedule state are inconsistent."
             )
-        
-        get_eta, get_eps = _validate_pert_and_learningrate(
+            
+    def _get_parameter_learning_rates(self) -> np.ndarray:
+        """Return the learning rate for each active parameter."""
+        self._validate_parameter_schedule_state()
+
+        get_eta, _ = _validate_pert_and_learningrate(
             self.perturbation,
             self.learning_rate,
         )
-
-        if self.parameter_dependent_lr_schedule:
-            n_start_lr = [self._parameter_schedule_steps[name] for name in self._active_parameter_names]
-        else:
-            n_start_lr = np.max(self._parameter_schedule_steps.values()) # oldest parameter step
-            
-        if self.parameter_dependent_perturbation_schedule:
-            n_start_perturbation = [self._parameter_schedule_steps[name] for name in self._active_parameter_names]
-        else:
-            n_start_perturbation = np.max(self._parameter_schedule_steps.values()) # oldest parameter step
 
         learning_rates = np.asarray(
             [
                 next(
                     get_eta(
-                        n_start=n_start
+                        n_start=self._parameter_schedule_steps[name]
                     )
                 )
-                for n_start in n_start_lr
+                for name in self._active_parameter_names
             ],
             dtype=float,
         )
 
-        perturbations = np.asarray(
-            [
-                next(
-                    get_eps(
-                        n_start=n_start
-                    )
-                )
-                for n_start in n_start_perturbation
-            ],
-            dtype=float,
-        )
-        
         birth_outer_iterations = np.asarray(
             [
                 self._parameter_birth_outer_iterations[name]
@@ -480,19 +445,46 @@ class SPSA(StepwiseOptimizer):
             dtype=float,
         )
 
-        learning_rate_birth_factors = (
+        learning_rates *= (
             birth_outer_iterations + 1.0
         ) ** (-self._parameter_birth_learning_rate_exponent)
 
-        perturbation_birth_factors = (
+        return learning_rates
+    
+    def _get_parameter_perturbations(self) -> np.ndarray:
+        """Return the perturbation strength for each active parameter."""
+        self._validate_parameter_schedule_state()
+
+        _, get_eps = _validate_pert_and_learningrate(
+            self.perturbation,
+            self.learning_rate,
+        )
+
+        perturbations = np.asarray(
+            [
+                next(
+                    get_eps(
+                        n_start=self._parameter_schedule_steps[name]
+                    )
+                )
+                for name in self._active_parameter_names
+            ],
+            dtype=float,
+        )
+
+        birth_outer_iterations = np.asarray(
+            [
+                self._parameter_birth_outer_iterations[name]
+                for name in self._active_parameter_names
+            ],
+            dtype=float,
+        )
+
+        perturbations *= (
             birth_outer_iterations + 1.0
         ) ** (-self._parameter_birth_perturbation_exponent)
 
-        # Modulate schedule strength according to parameter birth iteration.
-        learning_rates *= learning_rate_birth_factors
-        perturbations *= perturbation_birth_factors
-
-        return learning_rates, perturbations
+        return perturbations
 
     def get_support_level(self) -> dict[str, OptimizerSupportLevel]:
         """
@@ -884,9 +876,8 @@ class SPSA(StepwiseOptimizer):
         self._last_parameter_schedule_steps_used = None
         self._last_parameter_learning_rates = None
         self._last_parameter_perturbations = None
-        self._pending_parameter_learning_rates = None
         
-        if self.parameter_dependent_schedules:
+        if self.uses_parameter_dependent_schedules:
             if parameter_names is None:
                 parameter_names = tuple(str(i) for i in range(x0.size))
 
@@ -977,7 +968,7 @@ class SPSA(StepwiseOptimizer):
         
         logger.info(
             "Perturbation strength%s %s in directions %s.",
-            "s" if self.parameter_dependent_schedules else "",
+            "s" if self.parameter_dependent_perturbation_schedule else "",
             eps, 
             delta1
             )
@@ -1131,22 +1122,30 @@ class SPSA(StepwiseOptimizer):
         if self.p_iterator is None or self.lr_iterator is None:
             self._create_iterators(fun=loss, x0=x, n_start=max(iteration - 1, 0), **kwargs)
 
-        if self.parameter_dependent_schedules:
-            learning_rates, eps = self._get_parameter_schedule_values()
-            self._pending_parameter_learning_rates = learning_rates.copy()
+        if self.uses_parameter_dependent_schedules:
             self._last_parameter_schedule_steps_used = dict(
                 self._parameter_schedule_steps
             )
-            self._last_parameter_learning_rates = {
-                name: float(value)
-                for name, value in zip(self._active_parameter_names, learning_rates)
-            }
+
+        if self.parameter_dependent_perturbation_schedule:
+            eps = self._get_parameter_perturbations()
+            
             self._last_parameter_perturbations = {
                 name: float(value)
-                for name, value in zip(self._active_parameter_names, eps)
+                for name, value in zip(
+                    self._active_parameter_names,
+                    eps,
+                )
             }
         else:
             eps = next(self.p_iterator)
+        
+            if self.uses_parameter_dependent_schedules:
+                self._last_parameter_perturbations = {
+                    name: float(eps)
+                    for name in self._active_parameter_names
+                }
+                
         fx_estimate, gradient, hessian = self._point_estimate(
             loss,
             np.asarray(x, dtype=float),
@@ -1223,29 +1222,30 @@ class SPSA(StepwiseOptimizer):
         if self.lr_iterator is None:
             self._create_iterators(fun=fun, x0=x, n_start=max(iteration - 1, 0), **kwargs)
 
-        if self.parameter_dependent_schedules:
-            if self._pending_parameter_learning_rates is None:
-                learn_rate, perturbations = self._get_parameter_schedule_values()
-                self._last_parameter_schedule_steps_used = dict(
-                    self._parameter_schedule_steps
-                )
-                self._last_parameter_learning_rates = {
-                    name: float(value)
-                    for name, value in zip(self._active_parameter_names, learn_rate)
-                }
-                self._last_parameter_perturbations = {
-                    name: float(value)
-                    for name, value in zip(
-                        self._active_parameter_names,
-                        perturbations,
-                    )
-                }
-            else:
-                learn_rate = self._pending_parameter_learning_rates
+        if self.uses_parameter_dependent_schedules:
+            self._last_parameter_schedule_steps_used = dict(
+                self._parameter_schedule_steps
+            )
 
-            self._pending_parameter_learning_rates = None
+        if self.parameter_dependent_lr_schedule:
+            learn_rate = self._get_parameter_learning_rates()
+
+            self._last_parameter_learning_rates = {
+                name: float(value)
+                for name, value in zip(
+                    self._active_parameter_names,
+                    learn_rate,
+                )
+            }
         else:
             learn_rate = next(self.lr_iterator)
+
+            if self.uses_parameter_dependent_schedules:
+                self._last_parameter_learning_rates = {
+                    name: float(learn_rate)
+                    for name in self._active_parameter_names
+                }
+
         logger.log(VERBOSE_LEVEL, "Learning rate for this iteration is %s", learn_rate)
         
         update = grad * learn_rate
@@ -1329,7 +1329,7 @@ class SPSA(StepwiseOptimizer):
 
         self._iteration = next_iteration
         self._steps_in_run += 1
-        if self.parameter_dependent_schedules:
+        if self.uses_parameter_dependent_schedules:
             self._advance_parameter_schedule_steps()
         self._last_gradient = np.asarray(gradient_estimate, dtype=float)
         self._last_fx = float(fx_estimate)

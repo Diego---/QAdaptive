@@ -349,7 +349,8 @@ def test_trainer_records_parameter_dependent_spsa_schedule_values():
     optimizer = SPSA(
         learning_rate=0.2,
         perturbation=0.1,
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
     recorder = InnerLoopRecorder()
     trainer = InnerLoopTrainer(optimizer=optimizer, recorder=recorder)
