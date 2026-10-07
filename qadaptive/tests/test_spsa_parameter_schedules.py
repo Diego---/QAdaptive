@@ -13,7 +13,8 @@ def make_optimizer():
     return SPSA(
         learning_rate=0.1,
         perturbation=0.1,
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
     
 def test_parameter_schedule_steps_initialize_at_zero():
@@ -125,7 +126,8 @@ def test_restart_parameter_schedules_resets_all_active_parameters():
 
 def test_parameter_schedule_values_follow_individual_parameter_steps():
     optimizer = SPSA(
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.set_power_series_hyperparameters(
@@ -148,7 +150,8 @@ def test_parameter_schedule_values_follow_individual_parameter_steps():
         "θ_2": 8,
     }
 
-    learning_rates, perturbations = optimizer._get_parameter_schedule_values()
+    learning_rates = optimizer._get_parameter_learning_rates()
+    perturbations = optimizer._get_parameter_perturbations()
 
     expected_learning_rates = np.array([
         0.8 / (1.0 + 1) ** 0.5,
@@ -171,23 +174,29 @@ def test_parameter_schedule_values_follow_individual_parameter_steps():
         expected_perturbations,
     )
 
-def test_parameter_dependent_schedules_reject_second_order_spsa():
-    with pytest.raises(
-        ValueError,
-        match="first-order SPSA",
-    ):
+def test_parameter_dependent_perturbation_rejects_second_order_spsa():
+    with pytest.raises(ValueError, match="first-order SPSA"):
         SPSA(
-            learning_rate=0.1,
-            perturbation=0.1,
-            parameter_dependent_schedules=True,
+            parameter_dependent_perturbation_schedule=True,
             second_order=True,
         )
+
+
+def test_parameter_dependent_lr_allows_second_order_spsa():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=False,
+        second_order=True,
+    )
+
+    assert optimizer.second_order
 
 def test_point_sample_supports_parameter_dependent_perturbations():
     optimizer = SPSA(
         learning_rate=0.1,
         perturbation=0.1,
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     evaluated_points = []
@@ -227,7 +236,8 @@ def test_point_sample_supports_parameter_dependent_perturbations():
 
 def test_process_update_uses_parameter_dependent_learning_rates():
     optimizer = SPSA(
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.set_power_series_hyperparameters(
@@ -279,7 +289,8 @@ def test_parameter_dependent_step_uses_current_schedule_then_advances(
     monkeypatch,
 ):
     optimizer = SPSA(
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.set_power_series_hyperparameters(
@@ -358,7 +369,8 @@ def test_parameter_birth_outer_iterations_are_preserved_for_survivors():
     
 def test_parameter_birth_modulation_scales_new_parameter_schedules():
     optimizer = SPSA(
-        parameter_dependent_schedules=True,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
     )
 
     optimizer.set_power_series_hyperparameters(
@@ -388,9 +400,8 @@ def test_parameter_birth_modulation_scales_new_parameter_schedules():
         outer_iteration=3,
     )
 
-    learning_rates, perturbations = (
-        optimizer._get_parameter_schedule_values()
-    )
+    learning_rates = optimizer._get_parameter_learning_rates()
+    perturbations = optimizer._get_parameter_perturbations()
 
     np.testing.assert_allclose(
         learning_rates,
@@ -451,3 +462,169 @@ def test_spsa_minimize_termination_checker_receives_value_at_reported_point():
     assert len(observations) == 1
     params, value = observations[0]
     assert value == pytest.approx(quadratic(params))
+
+def test_parameter_dependent_lr_with_global_perturbation(monkeypatch):
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=False,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.8,
+        alpha=0.5,
+        c=0.2,
+        gamma=0.25,
+        stability_constant=0.0,
+    )
+
+    x = np.array([1.0, 2.0])
+
+    optimizer.initialize(
+        x,
+        lambda x: 2.0 * x[0] + 3.0 * x[1],
+        parameter_names=["θ_0", "θ_1"],
+    )
+
+    # Give the parameters different optimization ages.
+    optimizer._parameter_schedule_steps = {
+        "θ_0": 3,
+        "θ_1": 0,
+    }
+
+    monkeypatch.setattr(
+        "qadaptive.training.optimizers.spsa.bernoulli_perturbation",
+        lambda dim, perturbation_dims=None: np.array([1.0, -1.0]),
+    )
+
+    optimizer.step(
+        x,
+        lambda x: 2.0 * x[0] + 3.0 * x[1],
+    )
+
+    # Learning rate follows each parameter's own age.
+    assert optimizer.last_parameter_learning_rates == pytest.approx({
+        "θ_0": 0.8 / 4**0.5,
+        "θ_1": 0.8,
+    })
+
+    # Perturbation follows the single global SPSA clock.
+    assert optimizer.last_parameter_perturbations == pytest.approx({
+        "θ_0": 0.2,
+        "θ_1": 0.2,
+    })
+    
+def test_global_lr_with_parameter_dependent_perturbation(monkeypatch):
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=False,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.8,
+        alpha=0.5,
+        c=0.2,
+        gamma=0.25,
+        stability_constant=0.0,
+    )
+
+    x = np.array([1.0, 2.0])
+
+    optimizer.initialize(
+        x,
+        lambda x: 2.0 * x[0] + 3.0 * x[1],
+        parameter_names=["θ_0", "θ_1"],
+    )
+
+    optimizer._parameter_schedule_steps = {
+        "θ_0": 3,
+        "θ_1": 0,
+    }
+
+    monkeypatch.setattr(
+        "qadaptive.training.optimizers.spsa.bernoulli_perturbation",
+        lambda dim, perturbation_dims=None: np.array([1.0, -1.0]),
+    )
+
+    optimizer.step(
+        x,
+        lambda x: 2.0 * x[0] + 3.0 * x[1],
+    )
+
+    # Learning rate follows one global SPSA clock.
+    assert optimizer.last_parameter_learning_rates == pytest.approx({
+        "θ_0": 0.8,
+        "θ_1": 0.8,
+    })
+
+    # Perturbation follows each parameter's own age.
+    assert optimizer.last_parameter_perturbations == pytest.approx({
+        "θ_0": 0.2 / 4**0.25,
+        "θ_1": 0.2,
+    })
+
+def test_global_perturbation_continues_when_new_parameter_is_added(
+    monkeypatch,
+):
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=False,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.8,
+        alpha=0.5,
+        c=0.2,
+        gamma=0.25,
+        stability_constant=0.0,
+    )
+
+    monkeypatch.setattr(
+        "qadaptive.training.optimizers.spsa.bernoulli_perturbation",
+        lambda dim, perturbation_dims=None: np.ones(dim),
+    )
+
+    # First architecture.
+    x = np.zeros(2)
+
+    optimizer.initialize(
+        x,
+        quadratic,
+        parameter_names=["θ_0", "θ_1"],
+        outer_iteration=0,
+    )
+
+    optimizer.step(x, quadratic)
+
+    # Structural growth: θ_2 is newly born.
+    x_grown = np.zeros(3)
+
+    optimizer.initialize(
+        x_grown,
+        quadratic,
+        iteration_start=None,
+        parameter_names=["θ_0", "θ_1", "θ_2"],
+        outer_iteration=1,
+    )
+
+    assert optimizer.parameter_schedule_steps == {
+        "θ_0": 1,
+        "θ_1": 1,
+        "θ_2": 0,
+    }
+
+    optimizer.step(x_grown, quadratic)
+
+    expected_global_perturbation = 0.2 / 2**0.25
+
+    assert optimizer.last_parameter_perturbations == pytest.approx({
+        "θ_0": expected_global_perturbation,
+        "θ_1": expected_global_perturbation,
+        "θ_2": expected_global_perturbation,
+    })
+
+    # But the new parameter still gets the beginning of its LR schedule.
+    assert optimizer.last_parameter_learning_rates == pytest.approx({
+        "θ_0": 0.8 / 2**0.5,
+        "θ_1": 0.8 / 2**0.5,
+        "θ_2": 0.8,
+    })
