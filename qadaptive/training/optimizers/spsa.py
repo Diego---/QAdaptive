@@ -75,11 +75,11 @@ class SPSA(StepwiseOptimizer):
             Perturbation schedule.
         start_point : int, optional
             Default schedule offset for a fresh initialization.
-        parameter_dependent_lr_schedules : bool, optional
-            If True, the learning-rate schedules is tracked independently
+        parameter_dependent_lr_schedule : bool, optional
+            If True, the learning-rate schedule is tracked independently
             for each parameter. Newly introduced parameters start from schedule step zero,
             while surviving parameters retain their current schedule step. Defaults to False.
-        parameter_dependent_perturbation_schedules : bool, optional
+        parameter_dependent_perturbation_schedule : bool, optional
             If True, the perturbation strength schedule is tracked independently
             for each parameter. Newly introduced parameters start from schedule step zero,
             while surviving parameters retain their current schedule step. Defaults to False.
@@ -344,8 +344,8 @@ class SPSA(StepwiseOptimizer):
         """
         if not self.uses_parameter_dependent_schedules:
             raise RuntimeError(
-                "Cannot restore parameter schedules when "
-                "parameter_dependent_schedules=False."
+                "Cannot restore parameter schedules when neither SPSA schedule "
+                "is parameter-dependent."
             )
 
         if any(step < 0 for step in schedule_steps.values()):
@@ -394,8 +394,8 @@ class SPSA(StepwiseOptimizer):
         """
         if not self.uses_parameter_dependent_schedules:
             raise RuntimeError(
-                "Cannot restart parameter schedules when "
-                "parameter_dependent_schedules=False."
+                "Cannot restore parameter schedules when neither SPSA schedule "
+                "is parameter-dependent."
             )
 
         self._parameter_schedule_steps = {

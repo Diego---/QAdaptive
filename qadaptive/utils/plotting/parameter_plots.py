@@ -319,7 +319,8 @@ def plot_parameter_schedule_history(
     if not series:
         raise ValueError(
             f"No recorded {attribute!r} diagnostics are available. "
-            "Use SPSA with parameter_dependent_schedules=True."
+            "Use SPSA with a parameter-dependent learning-rate or "
+            "perturbation schedule enabled."
         )
 
     if parameters is None:
