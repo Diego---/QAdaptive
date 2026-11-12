@@ -545,6 +545,12 @@ class SPSA(StepwiseOptimizer):
         """
         self.learning_rate = value
 
+        self._hyperparameters.update({
+            "a": None,
+            "alpha": None,
+            "stability_constant": None,
+        })
+
     def set_perturbation(
         self,
         value: float | np.ndarray | Callable[..., Iterator[float]],
@@ -558,6 +564,11 @@ class SPSA(StepwiseOptimizer):
             Perturbation specification.
         """
         self.perturbation = value
+        
+        self._hyperparameters.update({
+            "c": None,
+            "gamma": None,
+        })
 
     def set_init_hessian(self, value: np.ndarray | None) -> None:
         """

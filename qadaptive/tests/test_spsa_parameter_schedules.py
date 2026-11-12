@@ -536,6 +536,43 @@ def test_birth_offsets_survive_growth_and_schedule_progression():
         ],
     )
     
+@pytest.mark.parametrize("schedule", ["learning_rate", "perturbation"])
+def test_birth_offsets_reject_overridden_schedules(schedule):
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.4,
+        alpha=0.602,
+        c=0.1,
+        gamma=0.101,
+    )
+
+    optimizer.set_parameter_birth_power_series(
+        learning_rate_exponent=0.5,
+        perturbation_exponent=0.02,
+    )
+
+    if schedule == "learning_rate":
+        optimizer.set_learning_rate(0.1)
+    else:
+        optimizer.set_perturbation(0.1)
+
+    optimizer.initialize(
+        np.zeros(1),
+        quadratic,
+        parameter_names=["θ_0"],
+        outer_iteration=1,
+    )
+
+    with pytest.raises(ValueError, match="power-series"):
+        if schedule == "learning_rate":
+            optimizer._get_parameter_learning_rates()
+        else:
+            optimizer._get_parameter_perturbations()
+    
 def test_restart_parameter_schedules_preserves_birth_iterations():
     optimizer = make_optimizer()
 
