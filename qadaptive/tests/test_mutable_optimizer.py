@@ -407,11 +407,18 @@ def test_rejected_pruning_restores_parameter_schedule_steps(monkeypatch):
         iterations=1,
     )
 
-    # Define the schedule state that should survive the rejected trial.
-    optimizer.restore_parameter_schedules({
-        parameter_names[0]: 8,
-        parameter_names[1]: 8,
-    })
+    # Define the schedule state and global birth steps that must survive rollback.
+    expected_birth_steps = {
+        parameter_names[0]: 0,
+        parameter_names[1]: 1,
+    }
+    optimizer.restore_parameter_schedules(
+        {
+            parameter_names[0]: 8,
+            parameter_names[1]: 8,
+        },
+        birth_global_steps=expected_birth_steps,
+    )
 
     # run_outer_step() automatically accepts the first outer proposal if no
     # previous outer-step baseline exists. Supply a minimal previous result so
@@ -432,10 +439,17 @@ def test_rejected_pruning_restores_parameter_schedule_steps(monkeypatch):
     )
 
     # We are testing rollback semantics here, not the acceptance criterion.
+    def reject_after_mutating_birth_steps(**kwargs):
+        # Simulate birth metadata changed during the rejected trial.
+        optimizer._parameter_birth_global_steps = {
+            name: 999 for name in parameter_names
+        }
+        return False
+
     monkeypatch.setattr(
         experiment,
         "_accept_outer_step",
-        lambda **kwargs: False,
+        reject_after_mutating_birth_steps,
     )
 
     prune_index = next(iter(experiment._2qbg_positions))
@@ -465,6 +479,7 @@ def test_rejected_pruning_restores_parameter_schedule_steps(monkeypatch):
         parameter_names[0]: 8,
         parameter_names[1]: 8,
     }
+    assert optimizer.parameter_birth_global_steps == expected_birth_steps
 
     # The structural pruning must also have been rolled back.
     assert len(experiment._2qbg_positions) == 1

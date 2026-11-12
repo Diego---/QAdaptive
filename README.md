@@ -225,7 +225,7 @@ final_params = experiment.get_current_parameter_dict()
 
 The `cx_identity` block becomes the identity at zero rotation angles. Zero initialisation preserves the current circuit's action for such blocks, this property depends on the selected block.
 
-### Parameter-dependent SPSA schedules
+<!-- ### Parameter-dependent SPSA schedules
 
 Standard SPSA uses a single learning-rate and perturbation schedule for the
 complete parameter vector. In an adaptive circuit, however, parameters can be
@@ -289,7 +289,7 @@ The birth exponents control how strongly later parameters are initialized:
 
 The parameter's birth iteration is retained throughout its lifetime. Restarting
 a schedule resets its optimization age but does not change when the parameter
-was introduced.
+was introduced. -->
 
 #### Restarting schedules after pruning
 
