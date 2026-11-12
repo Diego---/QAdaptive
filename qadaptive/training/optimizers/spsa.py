@@ -154,8 +154,8 @@ class SPSA(StepwiseOptimizer):
         # Outer-loop iteration at which each active parameter was introduced.
         self._parameter_birth_outer_iterations: dict[str, int] = {}
 
-        # Modulation of the schedule strength at parameter birth.
-        # beta = 0 reproduces the current parameter-dependent SPSA exactly.
+        # Birth-dependent offsets into the parameter-age power-law schedules.
+        # beta = 0 gives an offset of zero (ordinary age-dependent SPSA).
         self._parameter_birth_learning_rate_exponent: float = 0.0
         self._parameter_birth_perturbation_exponent: float = 0.0
 
@@ -389,8 +389,8 @@ class SPSA(StepwiseOptimizer):
         """
         Restart the SPSA schedules of all currently active parameters.
 
-        Each active parameter's schedule step is reset to zero. Parameter birth
-        iterations are preserved, so birth-strength modulation is unchanged.
+        Each parameter's optimization age is reset to zero. Birth iterations
+        are preserved, so the birth-dependent starting offsets remain unchanged.
         """
         if not self.uses_parameter_dependent_schedules:
             raise RuntimeError(
@@ -417,7 +417,7 @@ class SPSA(StepwiseOptimizer):
             )
             
     def _get_parameter_learning_rates(self) -> np.ndarray:
-        """Return the learning rate for each active parameter."""
+        """Return age-dependent learning rates with birth-dependent offsets."""
         self._validate_parameter_schedule_state()
 
         get_eta, _ = _validate_pert_and_learningrate(
@@ -425,34 +425,50 @@ class SPSA(StepwiseOptimizer):
             self.learning_rate,
         )
 
-        learning_rates = np.asarray(
-            [
-                next(
-                    get_eta(
-                        n_start=self._parameter_schedule_steps[name]
+        beta = self._parameter_birth_learning_rate_exponent
+
+        if beta != 0.0:
+            a = self._hyperparameters["a"]
+            alpha = self._hyperparameters["alpha"]
+            A = self._hyperparameters["stability_constant"]
+
+            if a is None or alpha is None or A is None or alpha <= 0 or A <= -1:
+                raise ValueError(
+                    "Birth offsets require a power-series learning-rate "
+                    "schedule with alpha > 0 and A > -1."
+                )
+
+        learning_rates = []
+
+        for name in self._active_parameter_names:
+            age = self._parameter_schedule_steps[name]
+            birth = self._parameter_birth_outer_iterations[name]
+
+            if beta == 0.0:
+                # Ordinary parameter-dependent schedule.
+                learning_rate = next(get_eta(n_start=age))
+            else:
+                # Birth-dependent starting position on the power series.
+                birth_offset = (A + 1.0) * (
+                    (birth + 1.0) ** (beta / alpha) - 1.0
+                )
+
+                learning_rate = next(
+                    powerseries(
+                        eta=a,
+                        power=alpha,
+                        offset=A + birth_offset,
+                        n_start=age,
                     )
                 )
-                for name in self._active_parameter_names
-            ],
-            dtype=float,
-        )
 
-        birth_outer_iterations = np.asarray(
-            [
-                self._parameter_birth_outer_iterations[name]
-                for name in self._active_parameter_names
-            ],
-            dtype=float,
-        )
+            learning_rates.append(learning_rate)
 
-        learning_rates *= (
-            birth_outer_iterations + 1.0
-        ) ** (-self._parameter_birth_learning_rate_exponent)
+        return np.asarray(learning_rates, dtype=float)
 
-        return learning_rates
-    
+
     def _get_parameter_perturbations(self) -> np.ndarray:
-        """Return the perturbation strength for each active parameter."""
+        """Return age-dependent perturbations with birth-dependent offsets."""
         self._validate_parameter_schedule_state()
 
         _, get_eps = _validate_pert_and_learningrate(
@@ -460,31 +476,45 @@ class SPSA(StepwiseOptimizer):
             self.learning_rate,
         )
 
-        perturbations = np.asarray(
-            [
-                next(
-                    get_eps(
-                        n_start=self._parameter_schedule_steps[name]
+        beta = self._parameter_birth_perturbation_exponent
+
+        if beta != 0.0:
+            c = self._hyperparameters["c"]
+            gamma = self._hyperparameters["gamma"]
+
+            if c is None or gamma is None or gamma <= 0:
+                raise ValueError(
+                    "Birth offsets require a power-series perturbation "
+                    "schedule with gamma > 0."
+                )
+
+        perturbations = []
+
+        for name in self._active_parameter_names:
+            age = self._parameter_schedule_steps[name]
+            birth = self._parameter_birth_outer_iterations[name]
+
+            if beta == 0.0:
+                # Ordinary parameter-dependent schedule.
+                perturbation = next(get_eps(n_start=age))
+            else:
+                # Birth-dependent starting position on the power series.
+                birth_offset = (
+                    (birth + 1.0) ** (beta / gamma) - 1.0
+                )
+
+                perturbation = next(
+                    powerseries(
+                        eta=c,
+                        power=gamma,
+                        offset=birth_offset,
+                        n_start=age,
                     )
                 )
-                for name in self._active_parameter_names
-            ],
-            dtype=float,
-        )
 
-        birth_outer_iterations = np.asarray(
-            [
-                self._parameter_birth_outer_iterations[name]
-                for name in self._active_parameter_names
-            ],
-            dtype=float,
-        )
+            perturbations.append(perturbation)
 
-        perturbations *= (
-            birth_outer_iterations + 1.0
-        ) ** (-self._parameter_birth_perturbation_exponent)
-
-        return perturbations
+        return np.asarray(perturbations, dtype=float)
 
     def get_support_level(self) -> dict[str, OptimizerSupportLevel]:
         """
@@ -610,29 +640,43 @@ class SPSA(StepwiseOptimizer):
         perturbation_exponent: float = 0.0,
     ) -> None:
         """
-        Set power-law modulation of SPSA schedule strength at parameter birth.
+        Configure birth-dependent starting offsets for SPSA power-series schedules.
 
-        For a parameter introduced at outer iteration K, the learning-rate and
-        perturbation schedules are multiplied by
+        Each parameter has an independent schedule indexed by its optimization age.
+        New parameters begin at age zero, but their initial position on the
+        power-law schedule is shifted according to their birth outer iteration.
 
-            (K + 1)^(-learning_rate_exponent)
+        For a parameter born at outer iteration K, with optimization age n
+        (number of completed updates since birth), the schedules are:
 
-        and
+            a_i(n) = a / (A + n + 1 + s_a)^alpha
+            c_i(n) = c / (n + 1 + s_c)^gamma
 
-            (K + 1)^(-perturbation_exponent),
+        where the birth-dependent starting offsets are:
 
-        respectively.
+            s_a = (A + 1) * ((K + 1)^(beta_a / alpha) - 1)
+            s_c = (K + 1)^(beta_c / gamma) - 1
 
-        Zero exponents reproduce the ordinary parameter-dependent schedules.
-        Positive exponents make later-born parameters less exploratory, while
-        negative exponents make later-born parameters more exploratory.
+        The offsets are determined by the parameter's birth iteration and remain
+        fixed throughout its lifetime. The parameter subsequently advances along
+        the original power-law schedule using its own optimization age.
+
+        A zero birth exponent gives a zero offset, recovering ordinary
+        parameter-dependent SPSA. Positive exponents give later-born parameters
+        smaller initial values; negative exponents give larger initial values.
+
+        Nonzero birth exponents require power-series schedules configured through
+        set_power_series_hyperparameters(), with a positive corresponding decay
+        exponent (alpha or gamma).
 
         Parameters
         ----------
         learning_rate_exponent : float, optional
-            Birth-iteration exponent for the learning-rate schedule.
+            Birth-dependent starting-offset exponent beta_a for learning rates.
+            Defaults to 0.0.
         perturbation_exponent : float, optional
-            Birth-iteration exponent for the perturbation schedule.
+            Birth-dependent starting-offset exponent beta_c for perturbations.
+            Defaults to 0.0.
         """
         if not np.isfinite(learning_rate_exponent):
             raise ValueError("learning_rate_exponent must be finite.")
