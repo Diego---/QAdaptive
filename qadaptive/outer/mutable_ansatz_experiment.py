@@ -1773,6 +1773,7 @@ class MutableAnsatzExperiment:
         - the outer-loop iteration counter.
         - per-parameter optimizer schedule steps,
         - per-parameter birth outer iterations,
+        - per-parameter global birth steps,
         """
         
         optimizer = self.trainer.optimizer
@@ -1782,9 +1783,13 @@ class MutableAnsatzExperiment:
             parameter_birth_outer_iterations = (
                 optimizer.parameter_birth_outer_iterations
             )
+            parameter_birth_global_steps = (
+                optimizer.parameter_birth_global_steps
+            )
         else:
             parameter_schedule_steps = None
             parameter_birth_outer_iterations = None
+            parameter_birth_global_steps = None
         
         return ExperimentSnapshot(
             ansatz=self.adaptive_ansatz.get_current_ansatz().copy(),
@@ -1806,6 +1811,7 @@ class MutableAnsatzExperiment:
             outer_iteration=self._outer_iteration,
             parameter_schedule_steps=parameter_schedule_steps,
             parameter_birth_outer_iterations=parameter_birth_outer_iterations,
+            parameter_birth_global_steps=parameter_birth_global_steps,
         )
 
 
@@ -1848,6 +1854,7 @@ class MutableAnsatzExperiment:
                 birth_outer_iterations=(
                     snapshot.parameter_birth_outer_iterations
                 ),
+                birth_global_steps=snapshot.parameter_birth_global_steps,
             )
 
         self.locked_gates = set(snapshot.locked_gates)
