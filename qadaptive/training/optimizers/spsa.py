@@ -271,6 +271,11 @@ class SPSA(StepwiseOptimizer):
         return dict(self._parameter_birth_outer_iterations)
 
     @property
+    def parameter_birth_global_steps(self) -> dict[str, int]:
+        """Return global SPSA update counts when active parameters were introduced."""
+        return dict(self._parameter_birth_global_steps)
+
+    @property
     def last_parameter_schedule_steps_used(self) -> dict[str, int] | None:
         """Return per-parameter schedule indices used by the most recent step."""
         if self._last_parameter_schedule_steps_used is None:
@@ -345,6 +350,7 @@ class SPSA(StepwiseOptimizer):
         self,
         schedule_steps: dict[str, int],
         birth_outer_iterations: dict[str, int] | None = None,
+        birth_global_steps: dict[str, int] | None = None,
     ) -> None:
         """
         Restore per-parameter SPSA schedule state.
@@ -357,6 +363,10 @@ class SPSA(StepwiseOptimizer):
         birth_outer_iterations : dict[str, int] | None, optional
             Mapping from active parameter names to the outer-loop iteration
             at which each parameter was first introduced.
+        birth_global_steps : dict[str, int] | None, optional
+            Mapping from active parameter names to the number of cumulative
+            SPSA updates completed when the parameter was introduced. If
+            omitted, use the current metadata for the restored parameters.
         """
         if not self.uses_parameter_dependent_schedules:
             raise RuntimeError(
@@ -395,10 +405,29 @@ class SPSA(StepwiseOptimizer):
                 "Parameter birth outer iterations must be non-negative."
             )
 
+        if birth_global_steps is None:
+            missing = set(schedule_steps) - set(self._parameter_birth_global_steps)
+            if missing:
+                raise ValueError(
+                    "Cannot restore parameter schedules because global birth-step "
+                    f"metadata is missing for parameters: {sorted(missing)}."
+                )
+            birth_global_steps = {
+                name: self._parameter_birth_global_steps[name]
+                for name in schedule_steps
+            }
+
+        if set(schedule_steps) != set(birth_global_steps):
+            raise ValueError(
+                "Schedule-step state and global birth-step state must contain "
+                "the same parameter names."
+            )
+        if any(step < 0 for step in birth_global_steps.values()):
+            raise ValueError("Parameter global birth steps must be non-negative.")
+
         self._parameter_schedule_steps = dict(schedule_steps)
-        self._parameter_birth_outer_iterations = dict(
-            birth_outer_iterations
-        )
+        self._parameter_birth_outer_iterations = dict(birth_outer_iterations)
+        self._parameter_birth_global_steps = dict(birth_global_steps)
         self._active_parameter_names = tuple(schedule_steps)
         
     def restart_parameter_schedules(self) -> None:
