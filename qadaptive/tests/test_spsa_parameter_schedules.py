@@ -782,3 +782,47 @@ def test_global_perturbation_continues_when_new_parameter_is_added(
         "θ_1": 0.8 / 2**0.5,
         "θ_2": 0.8,
     })
+
+def test_restoring_schedules_discards_rejected_birth_steps_without_rewinding_clock():
+    optimizer = SPSA(
+        learning_rate=0.1,
+        perturbation=0.1,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    x = np.zeros(1)
+    optimizer.initialize(x, quadratic, parameter_names=["θ_0"], outer_iteration=0)
+    optimizer.step(x, quadratic)
+
+    steps_before = optimizer.parameter_schedule_steps
+    births_before = optimizer.parameter_birth_outer_iterations
+    global_births_before = optimizer.parameter_birth_global_steps
+
+    optimizer.initialize(
+        np.zeros(2),
+        quadratic,
+        parameter_names=["θ_0", "θ_temp"],
+        outer_iteration=1,
+    )
+    assert optimizer.parameter_birth_global_steps["θ_temp"] == 1
+    optimizer.step(np.zeros(2), quadratic)
+    assert optimizer._total_spsa_updates == 2
+
+    optimizer.restore_parameter_schedules(
+        steps_before,
+        birth_outer_iterations=births_before,
+        birth_global_steps=global_births_before,
+    )
+
+    assert optimizer.parameter_schedule_steps == steps_before
+    assert optimizer.parameter_birth_outer_iterations == births_before
+    assert optimizer.parameter_birth_global_steps == global_births_before
+    assert optimizer._total_spsa_updates == 2
+
+    with pytest.raises(ValueError, match="same parameter names"):
+        optimizer.restore_parameter_schedules(
+            steps_before,
+            birth_outer_iterations=births_before,
+            birth_global_steps={"θ_temp": 1},
+        )
+
