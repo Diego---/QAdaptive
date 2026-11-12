@@ -163,6 +163,9 @@ class ExperimentSnapshot:
     parameter_birth_outer_iterations : dict[str, int] | None
         Outer-loop iteration indices when each parameter was first introduced.
         None for optimizers without parameter-dependent schedules.
+    parameter_birth_global_steps : dict[str, int] | None
+        Cumulative SPSA update counts when each parameter was introduced.
+        None for optimizers without parameter-dependent schedules.
     """
 
     ansatz: QuantumCircuit
@@ -175,6 +178,7 @@ class ExperimentSnapshot:
     outer_iteration: int
     parameter_schedule_steps: dict[str, int] | None = None
     parameter_birth_outer_iterations: dict[str, int] | None = None
+    parameter_birth_global_steps: dict[str, int] | None = None
 
 @dataclass
 class ActionSpec:
