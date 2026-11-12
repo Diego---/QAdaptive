@@ -158,6 +158,15 @@ class SPSA(StepwiseOptimizer):
         # beta = 0 gives an offset of zero (ordinary age-dependent SPSA).
         self._parameter_birth_learning_rate_exponent: float = 0.0
         self._parameter_birth_perturbation_exponent: float = 0.0
+        
+        # Optional floor ratio for the learning rate of newly introduced parameters.
+        self._parameter_birth_learning_rate_floor_ratio: float | None = None
+
+        # Cumulative SPSA updates, independent of iteration-counter resets.
+        self._total_spsa_updates: int = 0
+
+        # Global update count when each parameter was introduced.
+        self._parameter_birth_global_steps: dict[str, int] = {}
 
         # Diagnostics for the most recent parameter-dependent SPSA step.
         # These store the schedule state actually used before the per-parameter
@@ -317,6 +326,13 @@ class SPSA(StepwiseOptimizer):
             )
             for name in parameter_names
         }
+        
+        self._parameter_birth_global_steps = {
+            name: self._parameter_birth_global_steps.get(
+                name, self._total_spsa_updates
+            )
+            for name in parameter_names
+        }
 
         self._active_parameter_names = parameter_names
         
@@ -426,8 +442,9 @@ class SPSA(StepwiseOptimizer):
         )
 
         beta = self._parameter_birth_learning_rate_exponent
+        ratio = self._parameter_birth_learning_rate_floor_ratio
 
-        if beta != 0.0:
+        if beta != 0.0 or ratio is not None:
             a = self._hyperparameters["a"]
             alpha = self._hyperparameters["alpha"]
             A = self._hyperparameters["stability_constant"]
@@ -444,14 +461,26 @@ class SPSA(StepwiseOptimizer):
             age = self._parameter_schedule_steps[name]
             birth = self._parameter_birth_outer_iterations[name]
 
-            if beta == 0.0:
-                # Ordinary parameter-dependent schedule.
+            if beta == 0.0 and ratio is None:
                 learning_rate = next(get_eta(n_start=age))
+
             else:
-                # Birth-dependent starting position on the power series.
+                # Original birth-dependent starting offset.
                 birth_offset = (A + 1.0) * (
                     (birth + 1.0) ** (beta / alpha) - 1.0
                 )
+
+                # Apply the optional relative floor to later-born parameters.
+                if ratio is not None and birth > 0:
+                    global_birth_step = self._parameter_birth_global_steps[name]
+
+                    maximum_offset = (
+                        (A + global_birth_step + 1.0)
+                        * ratio ** (-1.0 / alpha)
+                        - (A + 1.0)
+                    )
+
+                    birth_offset = min(birth_offset, maximum_offset)
 
                 learning_rate = next(
                     powerseries(
@@ -649,6 +678,7 @@ class SPSA(StepwiseOptimizer):
         self,
         learning_rate_exponent: float = 0.0,
         perturbation_exponent: float = 0.0,
+        learning_rate_floor_ratio: float | None = None,
     ) -> None:
         """
         Configure birth-dependent starting offsets for SPSA power-series schedules.
@@ -688,6 +718,8 @@ class SPSA(StepwiseOptimizer):
         perturbation_exponent : float, optional
             Birth-dependent starting-offset exponent beta_c for perturbations.
             Defaults to 0.0.
+        learning_rate_floor_ratio : float | None, optional
+            Optional floor ratio for the learning rate of newly introduced parameters.
         """
         if not np.isfinite(learning_rate_exponent):
             raise ValueError("learning_rate_exponent must be finite.")
@@ -700,6 +732,17 @@ class SPSA(StepwiseOptimizer):
         )
         self._parameter_birth_perturbation_exponent = float(
             perturbation_exponent
+        )
+        
+        if learning_rate_floor_ratio is not None:
+            if not np.isfinite(learning_rate_floor_ratio) or learning_rate_floor_ratio < 1:
+                raise ValueError(
+                    "learning_rate_floor_ratio must be finite and >= 1, or None."
+                )
+
+        self._parameter_birth_learning_rate_floor_ratio = (
+            None if learning_rate_floor_ratio is None
+            else float(learning_rate_floor_ratio)
         )
 
     @staticmethod
@@ -932,6 +975,16 @@ class SPSA(StepwiseOptimizer):
         self._last_parameter_learning_rates = None
         self._last_parameter_perturbations = None
         
+        if iteration_start is None:
+            iteration_start = (
+                self._iteration if self._initialized else self.start_point
+            )
+
+        self._total_spsa_updates = max(
+            self._total_spsa_updates,
+            iteration_start,
+        )
+        
         if self.uses_parameter_dependent_schedules:
             if parameter_names is None:
                 parameter_names = tuple(str(i) for i in range(x0.size))
@@ -945,10 +998,6 @@ class SPSA(StepwiseOptimizer):
                 parameter_names=parameter_names,
                 outer_iteration=outer_iteration,
                 )
-
-        if iteration_start is None:
-            iteration_start = self._iteration if self._initialized else self.start_point
-
 
         self.reset_runtime_state(iteration_start=iteration_start)
         self._steps_in_run = 0
@@ -1383,6 +1432,7 @@ class SPSA(StepwiseOptimizer):
         )
 
         self._iteration = next_iteration
+        self._total_spsa_updates += 1
         self._steps_in_run += 1
         if self.uses_parameter_dependent_schedules:
             self._advance_parameter_schedule_steps()
