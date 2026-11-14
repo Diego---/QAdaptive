@@ -662,6 +662,24 @@ class SPSA(StepwiseOptimizer):
             kind, generation, birth_step, new_names, weight,
             start_a, offset_a, start_c, offset_c,
         )
+        if metrics:
+            logger.info(
+                "SPSA birth generation=%d: LR reference=%s ratio=%.6g "
+                "interval=[%.8g, %.8g] effective_ratio=%.6g; "
+                "perturbation reference=%s ratio=%.6g "
+                "interval=[%.8g, %.8g] effective_ratio=%.6g",
+                generation,
+                metrics["learning_rate"]["reference"],
+                metrics["learning_rate"]["ratio"],
+                metrics["learning_rate"]["effective_lower"],
+                metrics["learning_rate"]["upper"],
+                metrics["learning_rate"]["effective_ratio"],
+                metrics["perturbation"]["reference"],
+                metrics["perturbation"]["ratio"],
+                metrics["perturbation"]["effective_lower"],
+                metrics["perturbation"]["upper"],
+                metrics["perturbation"]["effective_ratio"],
+            )
 
     def get_support_level(self) -> dict[str, OptimizerSupportLevel]:
         """
@@ -1387,6 +1405,10 @@ class SPSA(StepwiseOptimizer):
                     eps,
                 )
             }
+            logger.debug(
+                "SPSA perturbations global_step=%d values=%s",
+                self._total_spsa_updates, self._last_parameter_perturbations,
+            )
         else:
             eps = next(self.p_iterator)
         
@@ -1487,6 +1509,10 @@ class SPSA(StepwiseOptimizer):
                     learn_rate,
                 )
             }
+            logger.debug(
+                "SPSA learning rates global_step=%d values=%s",
+                self._total_spsa_updates, self._last_parameter_learning_rates,
+            )
         else:
             learn_rate = next(self.lr_iterator)
 
