@@ -586,7 +586,8 @@ class SPSA(StepwiseOptimizer):
                 weight = rule
 
             previous = self._last_birth_generation
-            previous_age = max(0, birth_step - previous["birth_global_step"])
+            # Reference age rolls back with schedules; the global clock does not.
+            previous_age = int(previous["schedule_age"])
             metrics = {}
             for key, scale, power, base_offset, ref_key, ratio_key in (
                 ("learning_rate", a, alpha, A, "learning_rate_reference", "learning_rate_ratio"),
@@ -635,6 +636,7 @@ class SPSA(StepwiseOptimizer):
         self._last_birth_generation = {
             "generation": generation,
             "birth_global_step": birth_step,
+            "schedule_age": 0,
             "parameter_names": list(new_names),
             "learning_rate_start": float(start_a),
             "perturbation_start": float(start_c),
@@ -1608,6 +1610,8 @@ class SPSA(StepwiseOptimizer):
         self._steps_in_run += 1
         if self.uses_parameter_dependent_schedules:
             self._advance_parameter_schedule_steps()
+            if self._birth_schedule_config is not None and self._last_birth_generation is not None:
+                self._last_birth_generation["schedule_age"] += 1
         self._last_gradient = np.asarray(gradient_estimate, dtype=float)
         self._last_fx = float(fx_estimate)
         self._last_stepsize = None if skip else float(np.linalg.norm(x_next - x))
