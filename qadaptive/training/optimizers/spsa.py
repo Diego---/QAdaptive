@@ -576,9 +576,9 @@ class SPSA(StepwiseOptimizer):
         if self._last_birth_generation is None:
             # The initial parameter batch defines generation zero. It never
             # consumes a user-supplied insertion weight.
-            start_a = a / (A + 1.0) ** alpha
-            start_c = c
-            offset_a, offset_c = float(A), 0.0
+            start_a = a / (birth_step + A + 1.0) ** alpha
+            start_c = c / (birth_step + 1.0) ** gamma
+            offset_a, offset_c = float(A + birth_step), float(birth_step)
             generation = 0
             kind = "initial"
             metrics: dict[str, Any] = {}
