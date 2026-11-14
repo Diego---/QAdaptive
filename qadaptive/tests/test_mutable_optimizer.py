@@ -483,3 +483,30 @@ def test_rejected_pruning_restores_parameter_schedule_steps(monkeypatch):
 
     # The structural pruning must also have been rolled back.
     assert len(experiment._2qbg_positions) == 1
+
+
+def test_experiment_snapshot_restores_birth_policy_state():
+    experiment, optimizer = make_parameter_schedule_experiment()
+    optimizer.set_power_series_hyperparameters(
+        a=0.4, alpha=0.602, c=0.1, gamma=0.101
+    )
+    optimizer.set_parameter_birth_schedules(
+        learning_rate_reference="previous",
+        perturbation_reference="global",
+        learning_rate_ratio=1.2,
+        perturbation_ratio=1.0,
+        birth_position_rule=[0.8, 0.3],
+    )
+    experiment.train_one_time(
+        loss_function=quadratic, initial_point=np.zeros(2), iterations=1
+    )
+    before = optimizer.birth_schedule_state
+    snapshot = experiment._snapshot_state()
+    assert snapshot.birth_policy_state == before
+
+    optimizer._birth_generation_count = 42
+    optimizer._last_birth_generation = None
+    optimizer._parameter_birth_lr_offsets.clear()
+    experiment._restore_state(snapshot)
+    assert optimizer.birth_schedule_state == before
+
