@@ -688,6 +688,11 @@ class SPSA(StepwiseOptimizer):
         value : float | np.ndarray | Callable[..., Iterator[float]]
             Learning-rate specification.
         """
+        if self._birth_schedule_config is not None:
+            raise RuntimeError(
+                "Custom learning-rate schedules cannot replace a configured "
+                "power-law birth schedule."
+            )
         self.learning_rate = value
 
         self._hyperparameters.update({
@@ -708,6 +713,11 @@ class SPSA(StepwiseOptimizer):
         value : float | np.ndarray | Callable[..., Iterator[float]]
             Perturbation specification.
         """
+        if self._birth_schedule_config is not None:
+            raise RuntimeError(
+                "Custom perturbation schedules cannot replace a configured "
+                "power-law birth schedule."
+            )
         self.perturbation = value
         
         self._hyperparameters.update({
@@ -780,8 +790,14 @@ class SPSA(StepwiseOptimizer):
         def perturbation(n_start: int = 0) -> Iterator[float]:
             return powerseries(c, gamma, n_start=n_start)
 
-        self.set_learning_rate(learning_rate)
-        self.set_perturbation(perturbation)
+        if self._birth_schedule_config is not None and self._initialized:
+            raise RuntimeError(
+                "Cannot change power-law hyperparameters after birth-policy initialization."
+            )
+        # The power-law setter is allowed before the first run even when a
+        # birth policy has already been configured.
+        self.learning_rate = learning_rate
+        self.perturbation = perturbation
         self._hyperparameters = {
             "a": a,
             "alpha": alpha,
@@ -810,6 +826,10 @@ class SPSA(StepwiseOptimizer):
         """
         if self._initialized:
             raise RuntimeError("Configure birth schedules before initializing SPSA.")
+        if not self.uses_parameter_dependent_schedules:
+            raise ValueError(
+                "Enable a parameter-dependent SPSA schedule before configuring birth schedules."
+            )
         for label, reference in (
             ("learning_rate_reference", learning_rate_reference),
             ("perturbation_reference", perturbation_reference),
@@ -831,6 +851,9 @@ class SPSA(StepwiseOptimizer):
         elif isinstance(birth_position_rule, (list, tuple)):
             if not birth_position_rule:
                 raise ValueError("birth_position_rule list cannot be empty.")
+            if any(isinstance(weight, bool) or not isinstance(weight, Real)
+                   for weight in birth_position_rule):
+                raise TypeError("All birth position weights must be real numbers.")
             rule = [float(weight) for weight in birth_position_rule]
             if any(not np.isfinite(weight) or not 0 <= weight <= 1
                    for weight in rule):
