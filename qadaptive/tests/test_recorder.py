@@ -317,6 +317,32 @@ def test_recorder_records_serializes_and_plots_parameter_schedules():
     assert c_figure is not None
 
 
+
+
+def test_birth_schedule_event_is_serialized_and_written_to_jsonl(tmp_path):
+    import json
+
+    path = tmp_path / "events.jsonl"
+    recorder = InnerLoopRecorder(jsonl_path=path)
+    recorder.start_run(param_names=["θ_0", "θ_1"], initial_point=[0.0, 0.0])
+    event = {
+        "kind": "insertion",
+        "generation": 1,
+        "birth_global_step": 50,
+        "parameter_names": ["θ_1"],
+        "weight": 0.5,
+        "learning_rate": {"reference": "global", "start": 0.08, "offset": 3.1},
+        "perturbation": {"reference": "previous", "start": 0.1, "offset": 0.0},
+    }
+    recorder.set_birth_schedule_event(event)
+    recorder.finish_run(final_params=[0.0, 0.0], final_value=0.0)
+    assert recorder.to_dict()["runs"][0]["birth_schedule_event"] == event
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [record["event"] for record in records] == [
+        "run_started", "birth_schedule_selected", "run_finished"
+    ]
+    assert records[1]["birth_schedule_event"] == event
+
 def test_plot_objective_source_annotation_lists_supported_modes():
     hints = get_type_hints(InnerLoopRecorder.plot_objective)
     assert set(get_args(hints["source"])) == {
