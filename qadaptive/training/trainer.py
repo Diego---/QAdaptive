@@ -285,6 +285,10 @@ class InnerLoopTrainer:
                 self.recorder.set_parameter_birth_outer_iterations(
                     birth_outer_iterations
                 )
+
+            birth_event = getattr(self.optimizer, "last_birth_schedule_event", None)
+            if birth_event is not None:
+                self.recorder.set_birth_schedule_event(birth_event)
             
             if restart_parameter_schedules:
                 restart_schedules = getattr(
