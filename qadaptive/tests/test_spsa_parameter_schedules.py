@@ -391,6 +391,7 @@ def test_birth_offsets_follow_fixed_shifted_power_laws(reference, age):
     # Simulate 10 elapsed SPSA updates before growth.
     optimizer._total_spsa_updates = 10
     optimizer._parameter_schedule_steps["θ_0"] = 10
+    optimizer._last_birth_generation["schedule_age"] = 10
     optimizer.initialize(
         np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"],
         outer_iteration=1,
@@ -435,6 +436,7 @@ def test_birth_weight_list_repeats_last_value_and_tracks_insertion_batches():
     assert optimizer.last_birth_schedule_event["kind"] == "initial"
     assert optimizer.birth_schedule_state["generation_count"] == 0
     optimizer._total_spsa_updates = 20
+    optimizer._last_birth_generation["schedule_age"] = 20
     optimizer.initialize(
         np.zeros(3), quadratic, parameter_names=["θ_0", "θ_1", "θ_2"]
     )
@@ -446,11 +448,13 @@ def test_birth_weight_list_repeats_last_value_and_tracks_insertion_batches():
     assert optimizer.last_birth_schedule_event is None
     assert optimizer.birth_schedule_state["generation_count"] == 1
     optimizer._total_spsa_updates = 40
+    optimizer._last_birth_generation["schedule_age"] = 20
     optimizer.initialize(
         np.zeros(4), quadratic, parameter_names=["θ_0", "θ_1", "θ_2", "θ_3"]
     )
     assert optimizer.last_birth_schedule_event["weight"] == pytest.approx(0.3)
     optimizer._total_spsa_updates = 60
+    optimizer._last_birth_generation["schedule_age"] = 20
     optimizer.initialize(
         np.zeros(5), quadratic, parameter_names=["θ_0", "θ_1", "θ_2", "θ_3", "θ_4"]
     )
@@ -475,6 +479,7 @@ def test_previous_generation_caps_infeasible_birth_interval(caplog):
     optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
     # One update is too short for a twofold increase under either schedule.
     optimizer._total_spsa_updates = 1
+    optimizer._last_birth_generation["schedule_age"] = 1
     optimizer.initialize(
         np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"]
     )
@@ -502,11 +507,13 @@ def test_previous_generation_reference_survives_pruning_and_rollback():
     )
     optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
     optimizer._total_spsa_updates = 50
+    optimizer._last_birth_generation["schedule_age"] = 50
     optimizer.initialize(
         np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"]
     )
     prior = optimizer.birth_schedule_state
     optimizer._total_spsa_updates = 80
+    optimizer._last_birth_generation["schedule_age"] = 30
     optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
     assert optimizer.birth_schedule_state["previous_generation"] == prior["previous_generation"]
     optimizer.initialize(
@@ -573,6 +580,7 @@ def test_birth_schedule_harmonic_default_and_global_ordering():
     optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
     optimizer._total_spsa_updates = 100
     optimizer._parameter_schedule_steps["θ_0"] = 100
+    optimizer._last_birth_generation["schedule_age"] = 100
     optimizer.initialize(np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"])
     assert optimizer.last_birth_schedule_event["weight"] == pytest.approx(0.5)
     for age in (0, 10, 100):
