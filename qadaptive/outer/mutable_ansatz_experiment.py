@@ -1786,10 +1786,12 @@ class MutableAnsatzExperiment:
             parameter_birth_global_steps = (
                 optimizer.parameter_birth_global_steps
             )
+            birth_policy_state = getattr(optimizer, "birth_schedule_state", None)
         else:
             parameter_schedule_steps = None
             parameter_birth_outer_iterations = None
             parameter_birth_global_steps = None
+            birth_policy_state = None
         
         return ExperimentSnapshot(
             ansatz=self.adaptive_ansatz.get_current_ansatz().copy(),
@@ -1812,6 +1814,7 @@ class MutableAnsatzExperiment:
             parameter_schedule_steps=parameter_schedule_steps,
             parameter_birth_outer_iterations=parameter_birth_outer_iterations,
             parameter_birth_global_steps=parameter_birth_global_steps,
+            birth_policy_state=birth_policy_state,
         )
 
 
@@ -1855,6 +1858,7 @@ class MutableAnsatzExperiment:
                     snapshot.parameter_birth_outer_iterations
                 ),
                 birth_global_steps=snapshot.parameter_birth_global_steps,
+                birth_policy_state=snapshot.birth_policy_state,
             )
 
         self.locked_gates = set(snapshot.locked_gates)
