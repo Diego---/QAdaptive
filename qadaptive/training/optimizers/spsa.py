@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
 from collections.abc import Callable, Iterator
 from numbers import Real
 from time import time
@@ -154,13 +155,14 @@ class SPSA(StepwiseOptimizer):
         # Outer-loop iteration at which each active parameter was introduced.
         self._parameter_birth_outer_iterations: dict[str, int] = {}
 
-        # Birth-dependent offsets into the parameter-age power-law schedules.
-        # beta = 0 gives an offset of zero (ordinary age-dependent SPSA).
-        self._parameter_birth_learning_rate_exponent: float = 0.0
-        self._parameter_birth_perturbation_exponent: float = 0.0
-        
-        # Optional floor ratio for the learning rate of newly introduced parameters.
-        self._parameter_birth_learning_rate_floor_ratio: float | None = None
+        # Optional fixed birth offsets, chosen once when a parameter batch appears.
+        # None preserves ordinary independent-age SPSA without a birth policy.
+        self._birth_schedule_config: dict[str, Any] | None = None
+        self._birth_generation_count = 0
+        self._last_birth_generation: dict[str, Any] | None = None
+        self._parameter_birth_lr_offsets: dict[str, float] = {}
+        self._parameter_birth_c_offsets: dict[str, float] = {}
+        self._last_birth_schedule_event: dict[str, Any] | None = None
 
         # Cumulative SPSA updates, independent of iteration-counter resets.
         self._total_spsa_updates: int = 0
@@ -221,10 +223,7 @@ class SPSA(StepwiseOptimizer):
             "start_point": self.start_point,
             "parameter_dependent_lr_schedule": self.parameter_dependent_lr_schedule,
             "parameter_dependent_perturbation_schedule": self.parameter_dependent_perturbation_schedule,
-            "parameter_birth_learning_rate_exponent":
-                self._parameter_birth_learning_rate_exponent,
-            "parameter_birth_perturbation_exponent":
-                self._parameter_birth_perturbation_exponent,
+            "parameter_birth_schedules": deepcopy(self._birth_schedule_config),
             "last_avg": self.last_avg,
             "resamplings": self.resamplings,
             "perturbation_dims": self.perturbation_dims,
@@ -296,6 +295,21 @@ class SPSA(StepwiseOptimizer):
             return None
         return dict(self._last_parameter_perturbations)
     
+    @property
+    def birth_schedule_state(self) -> dict[str, Any]:
+        """Serializable optimizer birth state for snapshots and rollback."""
+        return deepcopy({
+            "generation_count": self._birth_generation_count,
+            "previous_generation": self._last_birth_generation,
+            "learning_rate_offsets": self._parameter_birth_lr_offsets,
+            "perturbation_offsets": self._parameter_birth_c_offsets,
+        })
+
+    @property
+    def last_birth_schedule_event(self) -> dict[str, Any] | None:
+        """Return the birth decision from the most recent initialize, if any."""
+        return deepcopy(self._last_birth_schedule_event)
+
     def _reconcile_parameter_schedule_steps(
         self,
         parameter_names: list[str] | tuple[str, ...],
@@ -351,6 +365,7 @@ class SPSA(StepwiseOptimizer):
         schedule_steps: dict[str, int],
         birth_outer_iterations: dict[str, int] | None = None,
         birth_global_steps: dict[str, int] | None = None,
+        birth_policy_state: dict[str, Any] | None = None,
     ) -> None:
         """
         Restore per-parameter SPSA schedule state.
@@ -429,6 +444,26 @@ class SPSA(StepwiseOptimizer):
         self._parameter_birth_outer_iterations = dict(birth_outer_iterations)
         self._parameter_birth_global_steps = dict(birth_global_steps)
         self._active_parameter_names = tuple(schedule_steps)
+        if birth_policy_state is not None:
+            offsets_a = dict(birth_policy_state["learning_rate_offsets"])
+            offsets_c = dict(birth_policy_state["perturbation_offsets"])
+            if set(offsets_a) != set(schedule_steps) or set(offsets_c) != set(schedule_steps):
+                raise ValueError("Restored birth offsets must match active parameter names.")
+            self._parameter_birth_lr_offsets = {key: float(value) for key, value in offsets_a.items()}
+            self._parameter_birth_c_offsets = {key: float(value) for key, value in offsets_c.items()}
+            self._birth_generation_count = int(birth_policy_state["generation_count"])
+            self._last_birth_generation = deepcopy(birth_policy_state["previous_generation"])
+        else:
+            # Preserve survivor offsets for direct restore calls from older clients.
+            self._parameter_birth_lr_offsets = {
+                name: self._parameter_birth_lr_offsets[name]
+                for name in schedule_steps if name in self._parameter_birth_lr_offsets
+            }
+            self._parameter_birth_c_offsets = {
+                name: self._parameter_birth_c_offsets[name]
+                for name in schedule_steps if name in self._parameter_birth_c_offsets
+            }
+        self._last_birth_schedule_event = None
         
     def restart_parameter_schedules(self) -> None:
         """
@@ -447,6 +482,11 @@ class SPSA(StepwiseOptimizer):
             name: 0
             for name in self._active_parameter_names
         }
+        if self._birth_schedule_config is not None:
+            logger.warning(
+                "Parameter schedule ages restarted; comparisons with global and "
+                "previous-generation trajectories may no longer be ordered."
+            )
         
     def _validate_parameter_schedule_state(self) -> None:
         if not self._active_parameter_names:
@@ -462,117 +502,164 @@ class SPSA(StepwiseOptimizer):
             )
             
     def _get_parameter_learning_rates(self) -> np.ndarray:
-        """Return age-dependent learning rates with birth-dependent offsets."""
+        """Get the fixed-offset power-law learning rates at each parameter age."""
         self._validate_parameter_schedule_state()
+        if self._birth_schedule_config is None:
+            get_eta, _ = _validate_pert_and_learningrate(
+                self.perturbation, self.learning_rate
+            )
+            return np.asarray([
+                next(get_eta(n_start=self._parameter_schedule_steps[name]))
+                for name in self._active_parameter_names
+            ], dtype=float)
 
-        get_eta, _ = _validate_pert_and_learningrate(
-            self.perturbation,
-            self.learning_rate,
-        )
-
-        beta = self._parameter_birth_learning_rate_exponent
-        ratio = self._parameter_birth_learning_rate_floor_ratio
-
-        if beta != 0.0 or ratio is not None:
-            a = self._hyperparameters["a"]
-            alpha = self._hyperparameters["alpha"]
-            A = self._hyperparameters["stability_constant"]
-
-            if a is None or alpha is None or A is None or alpha <= 0 or A <= -1:
-                raise ValueError(
-                    "Birth offsets require a power-series learning-rate "
-                    "schedule with alpha > 0 and A > -1."
-                )
-
-        learning_rates = []
-
-        for name in self._active_parameter_names:
-            age = self._parameter_schedule_steps[name]
-            birth = self._parameter_birth_outer_iterations[name]
-
-            if beta == 0.0 and ratio is None:
-                learning_rate = next(get_eta(n_start=age))
-
-            else:
-                # Original birth-dependent starting offset.
-                birth_offset = (A + 1.0) * (
-                    (birth + 1.0) ** (beta / alpha) - 1.0
-                )
-
-                # Apply the optional relative floor to later-born parameters.
-                if ratio is not None and birth > 0:
-                    global_birth_step = self._parameter_birth_global_steps[name]
-
-                    maximum_offset = (
-                        (A + global_birth_step + 1.0)
-                        * ratio ** (-1.0 / alpha)
-                        - (A + 1.0)
-                    )
-
-                    birth_offset = min(birth_offset, maximum_offset)
-
-                learning_rate = next(
-                    powerseries(
-                        eta=a,
-                        power=alpha,
-                        offset=A + birth_offset,
-                        n_start=age,
-                    )
-                )
-
-            learning_rates.append(learning_rate)
-
-        return np.asarray(learning_rates, dtype=float)
-
+        a = self._hyperparameters["a"]
+        alpha = self._hyperparameters["alpha"]
+        return np.asarray([
+            a / (self._parameter_schedule_steps[name]
+                 + self._parameter_birth_lr_offsets[name] + 1.0) ** alpha
+            for name in self._active_parameter_names
+        ], dtype=float)
 
     def _get_parameter_perturbations(self) -> np.ndarray:
-        """Return age-dependent perturbations with birth-dependent offsets."""
+        """Get the fixed-offset power-law perturbations at each parameter age."""
         self._validate_parameter_schedule_state()
+        if self._birth_schedule_config is None:
+            _, get_eps = _validate_pert_and_learningrate(
+                self.perturbation, self.learning_rate
+            )
+            return np.asarray([
+                next(get_eps(n_start=self._parameter_schedule_steps[name]))
+                for name in self._active_parameter_names
+            ], dtype=float)
 
-        _, get_eps = _validate_pert_and_learningrate(
-            self.perturbation,
-            self.learning_rate,
-        )
+        c = self._hyperparameters["c"]
+        gamma = self._hyperparameters["gamma"]
+        return np.asarray([
+            c / (self._parameter_schedule_steps[name]
+                 + self._parameter_birth_c_offsets[name] + 1.0) ** gamma
+            for name in self._active_parameter_names
+        ], dtype=float)
 
-        beta = self._parameter_birth_perturbation_exponent
+    def _initialize_birth_schedules(self, new_names: list[str]) -> None:
+        """Assign one fixed offset per new parameter, once per insertion batch."""
+        self._last_birth_schedule_event = None
+        if self._birth_schedule_config is None:
+            return
 
-        if beta != 0.0:
-            c = self._hyperparameters["c"]
-            gamma = self._hyperparameters["gamma"]
+        cfg = self._birth_schedule_config
+        hp = self._hyperparameters
+        a, alpha, A = hp["a"], hp["alpha"], hp["stability_constant"]
+        c, gamma = hp["c"], hp["gamma"]
+        if any(x is None for x in (a, alpha, A, c, gamma)) or (
+            a <= 0 or c <= 0 or alpha <= 0 or gamma <= 0 or A <= -1
+        ):
+            raise ValueError(
+                "Birth schedules require positive power-series coefficients and "
+                "exponents, with stability_constant > -1."
+            )
+        if not new_names:
+            return
 
-            if c is None or gamma is None or gamma <= 0:
-                raise ValueError(
-                    "Birth offsets require a power-series perturbation "
-                    "schedule with gamma > 0."
-                )
-
-        perturbations = []
-
-        for name in self._active_parameter_names:
-            age = self._parameter_schedule_steps[name]
-            birth = self._parameter_birth_outer_iterations[name]
-
-            if beta == 0.0:
-                # Ordinary parameter-dependent schedule.
-                perturbation = next(get_eps(n_start=age))
+        birth_step = self._total_spsa_updates
+        if self._last_birth_generation is None:
+            # The initial parameter batch defines generation zero. It never
+            # consumes a user-supplied insertion weight.
+            start_a = a / (A + 1.0) ** alpha
+            start_c = c
+            offset_a, offset_c = float(A), 0.0
+            generation = 0
+            kind = "initial"
+            metrics: dict[str, Any] = {}
+            weight = None
+        else:
+            generation = self._birth_generation_count + 1
+            kind = "insertion"
+            rule = cfg["birth_position_rule"]
+            if isinstance(rule, str):
+                weight = 1.0 / (generation + 1.0)  # harmonic
+            elif isinstance(rule, list):
+                weight = rule[min(generation - 1, len(rule) - 1)]
             else:
-                # Birth-dependent starting position on the power series.
-                birth_offset = (
-                    (birth + 1.0) ** (beta / gamma) - 1.0
-                )
+                weight = rule
 
-                perturbation = next(
-                    powerseries(
-                        eta=c,
-                        power=gamma,
-                        offset=birth_offset,
-                        n_start=age,
+            previous = self._last_birth_generation
+            previous_age = max(0, birth_step - previous["birth_global_step"])
+            metrics = {}
+            for key, scale, power, base_offset, ref_key, ratio_key in (
+                ("learning_rate", a, alpha, A, "learning_rate_reference", "learning_rate_ratio"),
+                ("perturbation", c, gamma, 0.0, "perturbation_reference", "perturbation_ratio"),
+            ):
+                if cfg[ref_key] == "global":
+                    upper = scale / (base_offset + 1.0) ** power
+                    current_ref = scale / (birth_step + base_offset + 1.0) ** power
+                else:
+                    upper = previous[key + "_start"]
+                    current_ref = scale / (
+                        previous_age + previous[key + "_offset"] + 1.0
+                    ) ** power
+                requested_lower = cfg[ratio_key] * current_ref
+                capped = requested_lower > upper
+                effective_lower = min(requested_lower, upper)
+                selected = effective_lower + weight * (upper - effective_lower)
+                offset = (scale / selected) ** (1.0 / power) - 1.0
+                metrics[key] = {
+                    "reference": cfg[ref_key],
+                    "ratio": cfg[ratio_key],
+                    "reference_current": float(current_ref),
+                    "upper": float(upper),
+                    "requested_lower": float(requested_lower),
+                    "effective_lower": float(effective_lower),
+                    "start": float(selected),
+                    "offset": float(offset),
+                    "effective_ratio": float(selected / current_ref),
+                    "capped": bool(capped),
+                }
+                if capped:
+                    logger.warning(
+                        "SPSA birth generation %d: %s requested lower %.8g "
+                        "exceeds maximum %.8g; using the maximum.",
+                        generation, key, requested_lower, upper,
                     )
-                )
+            start_a = metrics["learning_rate"]["start"]
+            start_c = metrics["perturbation"]["start"]
+            offset_a = metrics["learning_rate"]["offset"]
+            offset_c = metrics["perturbation"]["offset"]
 
-            perturbations.append(perturbation)
-
-        return np.asarray(perturbations, dtype=float)
+        for name in new_names:
+            self._parameter_birth_lr_offsets[name] = float(offset_a)
+            self._parameter_birth_c_offsets[name] = float(offset_c)
+        self._birth_generation_count = generation
+        self._last_birth_generation = {
+            "generation": generation,
+            "birth_global_step": birth_step,
+            "parameter_names": list(new_names),
+            "learning_rate_start": float(start_a),
+            "perturbation_start": float(start_c),
+            "learning_rate_offset": float(offset_a),
+            "perturbation_offset": float(offset_c),
+        }
+        self._last_birth_schedule_event = {
+            "kind": kind,
+            "generation": generation,
+            "birth_global_step": birth_step,
+            "parameter_names": list(new_names),
+            "weight": weight,
+            "configuration": deepcopy(cfg),
+            "learning_rate": metrics.get("learning_rate", {
+                "start": float(start_a), "offset": float(offset_a)
+            }),
+            "perturbation": metrics.get("perturbation", {
+                "start": float(start_c), "offset": float(offset_c)
+            }),
+        }
+        logger.info(
+            "SPSA birth %s generation=%d global_step=%d parameters=%s "
+            "weight=%s learning_rate_start=%.8g A_n=%.8g "
+            "perturbation_start=%.8g C_n=%.8g",
+            kind, generation, birth_step, new_names, weight,
+            start_a, offset_a, start_c, offset_c,
+        )
 
     def get_support_level(self) -> dict[str, OptimizerSupportLevel]:
         """
@@ -703,76 +790,65 @@ class SPSA(StepwiseOptimizer):
             "gamma": gamma,
         }
         
-    def set_parameter_birth_power_series(
+    def set_parameter_birth_schedules(
         self,
-        learning_rate_exponent: float = 0.0,
-        perturbation_exponent: float = 0.0,
-        learning_rate_floor_ratio: float | None = None,
+        learning_rate_reference: str = "global",
+        perturbation_reference: str = "global",
+        learning_rate_ratio: float = 1.2,
+        perturbation_ratio: float = 1.0,
+        birth_position_rule: float | list[float] | str = "harmonic",
     ) -> None:
+        """Configure fixed starting offsets for newly introduced parameter batches.
+
+        References are "global" (the original schedule) or "previous" (the
+        preceding generation, including after its parameters are pruned).
+        The birth position lies between the reference's current value times
+        the ratio and its maximum initial value. If that interval is empty,
+        its maximum is used. A list of positions repeats its final element
+        after exhaustion; the "harmonic" rule uses 1 / (generation + 1).
+        No relative floor is applied after birth.
         """
-        Configure birth-dependent starting offsets for SPSA power-series schedules.
-
-        Each parameter has an independent schedule indexed by its optimization age.
-        New parameters begin at age zero, but their initial position on the
-        power-law schedule is shifted according to their birth outer iteration.
-
-        For a parameter born at outer iteration K, with optimization age n
-        (number of completed updates since birth), the schedules are:
-
-            a_i(n) = a / (A + n + 1 + s_a)^alpha
-            c_i(n) = c / (n + 1 + s_c)^gamma
-
-        where the birth-dependent starting offsets are:
-
-            s_a = (A + 1) * ((K + 1)^(beta_a / alpha) - 1)
-            s_c = (K + 1)^(beta_c / gamma) - 1
-
-        The offsets are determined by the parameter's birth iteration and remain
-        fixed throughout its lifetime. The parameter subsequently advances along
-        the original power-law schedule using its own optimization age.
-
-        A zero birth exponent gives a zero offset, recovering ordinary
-        parameter-dependent SPSA. Positive exponents give later-born parameters
-        smaller initial values; negative exponents give larger initial values.
-
-        Nonzero birth exponents require power-series schedules configured through
-        set_power_series_hyperparameters(), with a positive corresponding decay
-        exponent (alpha or gamma).
-
-        Parameters
-        ----------
-        learning_rate_exponent : float, optional
-            Birth-dependent starting-offset exponent beta_a for learning rates.
-            Defaults to 0.0.
-        perturbation_exponent : float, optional
-            Birth-dependent starting-offset exponent beta_c for perturbations.
-            Defaults to 0.0.
-        learning_rate_floor_ratio : float | None, optional
-            Optional floor ratio for the learning rate of newly introduced parameters.
-        """
-        if not np.isfinite(learning_rate_exponent):
-            raise ValueError("learning_rate_exponent must be finite.")
-
-        if not np.isfinite(perturbation_exponent):
-            raise ValueError("perturbation_exponent must be finite.")
-
-        self._parameter_birth_learning_rate_exponent = float(
-            learning_rate_exponent
-        )
-        self._parameter_birth_perturbation_exponent = float(
-            perturbation_exponent
-        )
-        
-        if learning_rate_floor_ratio is not None:
-            if not np.isfinite(learning_rate_floor_ratio) or learning_rate_floor_ratio < 1:
-                raise ValueError(
-                    "learning_rate_floor_ratio must be finite and >= 1, or None."
-                )
-
-        self._parameter_birth_learning_rate_floor_ratio = (
-            None if learning_rate_floor_ratio is None
-            else float(learning_rate_floor_ratio)
-        )
+        if self._initialized:
+            raise RuntimeError("Configure birth schedules before initializing SPSA.")
+        for label, reference in (
+            ("learning_rate_reference", learning_rate_reference),
+            ("perturbation_reference", perturbation_reference),
+        ):
+            if reference not in ("global", "previous"):
+                raise ValueError(f"{label} must be 'global' or 'previous'.")
+        for label, ratio in (
+            ("learning_rate_ratio", learning_rate_ratio),
+            ("perturbation_ratio", perturbation_ratio),
+        ):
+            if isinstance(ratio, bool) or not isinstance(ratio, Real) or (
+                not np.isfinite(ratio) or ratio < 1
+            ):
+                raise ValueError(f"{label} must be finite and >= 1.")
+        if isinstance(birth_position_rule, str):
+            if birth_position_rule != "harmonic":
+                raise ValueError("Unknown birth position rule; expected 'harmonic'.")
+            rule: float | list[float] | str = birth_position_rule
+        elif isinstance(birth_position_rule, (list, tuple)):
+            if not birth_position_rule:
+                raise ValueError("birth_position_rule list cannot be empty.")
+            rule = [float(weight) for weight in birth_position_rule]
+            if any(not np.isfinite(weight) or not 0 <= weight <= 1
+                   for weight in rule):
+                raise ValueError("All birth position weights must be in [0, 1].")
+        elif isinstance(birth_position_rule, Real) and not isinstance(birth_position_rule, bool):
+            rule = float(birth_position_rule)
+            if not np.isfinite(rule) or not 0 <= rule <= 1:
+                raise ValueError("birth_position_rule must be in [0, 1].")
+        else:
+            raise TypeError("birth_position_rule must be a number, list, or 'harmonic'.")
+        self._birth_schedule_config = {
+            "learning_rate_reference": learning_rate_reference,
+            "perturbation_reference": perturbation_reference,
+            "learning_rate_ratio": float(learning_rate_ratio),
+            "perturbation_ratio": float(perturbation_ratio),
+            "birth_position_rule": rule,
+        }
+        logger.info("Configured SPSA parameter birth schedules: %s", self._birth_schedule_config)
 
     @staticmethod
     def calibrate(
@@ -1014,10 +1090,15 @@ class SPSA(StepwiseOptimizer):
             iteration_start,
         )
         
+        new_parameter_names: list[str] = []
         if self.uses_parameter_dependent_schedules:
             if parameter_names is None:
                 parameter_names = tuple(str(i) for i in range(x0.size))
 
+            new_parameter_names = [
+                name for name in parameter_names
+                if name not in self._parameter_schedule_steps
+            ]
             if len(parameter_names) != x0.size:
                 raise ValueError(
                     "Length of parameter_names must match the parameter vector dimension."
@@ -1037,6 +1118,17 @@ class SPSA(StepwiseOptimizer):
             n_start=iteration_start,
             **kwargs,
         )
+        if self.uses_parameter_dependent_schedules:
+            self._initialize_birth_schedules(new_parameter_names)
+            active = set(self._active_parameter_names)
+            self._parameter_birth_lr_offsets = {
+                name: offset for name, offset in self._parameter_birth_lr_offsets.items()
+                if name in active
+            }
+            self._parameter_birth_c_offsets = {
+                name: offset for name, offset in self._parameter_birth_c_offsets.items()
+                if name in active
+            }
 
         self._active_lse_solver = np.linalg.solve if self.lse_solver is None else self.lse_solver
 
