@@ -511,9 +511,12 @@ def test_previous_generation_reference_survives_pruning_and_rollback():
     optimizer.initialize(
         np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"]
     )
-    prior = optimizer.birth_schedule_state
+    
     optimizer._total_spsa_updates = 80
     optimizer._last_birth_generation["schedule_age"] = 30
+    
+    prior = optimizer.birth_schedule_state
+    
     optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
     assert optimizer.birth_schedule_state["previous_generation"] == prior["previous_generation"]
     optimizer.initialize(
