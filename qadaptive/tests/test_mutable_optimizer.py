@@ -501,6 +501,10 @@ def test_experiment_snapshot_restores_birth_policy_state():
         loss_function=quadratic, initial_point=np.zeros(2), iterations=1
     )
     before = optimizer.birth_schedule_state
+    birth_event = experiment.recorder.last_run.birth_schedule_event
+    assert birth_event is not None
+    assert birth_event["kind"] == "initial"
+    assert experiment.recorder.to_dict()["runs"][-1]["birth_schedule_event"] == birth_event
     snapshot = experiment._snapshot_state()
     assert snapshot.birth_policy_state == before
 
