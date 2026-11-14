@@ -7,6 +7,7 @@ from numbers import Real
 from time import time
 from typing import Any
 import itertools
+import json
 import logging
 import warnings
 
@@ -158,6 +159,7 @@ class SPSA(StepwiseOptimizer):
         # Optional fixed birth offsets, chosen once when a parameter batch appears.
         # None preserves ordinary independent-age SPSA without a birth policy.
         self._birth_schedule_config: dict[str, Any] | None = None
+        self._birth_position_callable: Callable[[int, int], float] | None = None
         self._birth_generation_count = 0
         self._last_birth_generation: dict[str, Any] | None = None
         self._parameter_birth_lr_offsets: dict[str, float] = {}
@@ -587,12 +589,34 @@ class SPSA(StepwiseOptimizer):
             generation = self._birth_generation_count + 1
             kind = "insertion"
             rule = cfg["birth_position_rule"]
-            if isinstance(rule, str):
+            
+            if self._birth_position_callable is not None:
+                weight = self._birth_position_callable(
+                    generation,
+                    birth_step,
+                )
+            
+            elif isinstance(rule, str):
                 weight = 1.0 / (generation + 1.0)  # harmonic
             elif isinstance(rule, list):
                 weight = rule[min(generation - 1, len(rule) - 1)]
             else:
                 weight = rule
+                
+            # Validate the actual weight, including callable results.
+            if isinstance(weight, bool) or not isinstance(weight, Real):
+                raise TypeError(
+                    "birth_position_rule must return a real-valued "
+                    "weight in [0, 1]."
+                )
+                
+            if not np.isfinite(weight) or not 0 <= weight <= 1:
+                raise ValueError(
+                    f"birth_position_rule returned {weight!r}; "
+                    "expected a finite value in [0, 1]."
+                )
+                
+            weight = float(weight)
 
             previous = self._last_birth_generation
             # Reference age rolls back with schedules; the global clock does not.
@@ -843,17 +867,51 @@ class SPSA(StepwiseOptimizer):
         perturbation_reference: str = "global",
         learning_rate_ratio: float = 1.2,
         perturbation_ratio: float = 1.0,
-        birth_position_rule: float | list[float] | str = "harmonic",
+        birth_position_rule: float | list[float] | str | Callable[[int, int], float]= 0.05,
     ) -> None:
-        """Configure fixed starting offsets for newly introduced parameter batches.
+        """
+        Configure birth-dependent SPSA schedules for newly introduced parameters.
 
-        References are "global" (the original schedule) or "previous" (the
-        preceding generation, including after its parameters are pruned).
-        The birth position lies between the reference's current value times
-        the ratio and its maximum initial value. If that interval is empty,
-        its maximum is used. A list of positions repeats its final element
-        after exhaustion; the "harmonic" rule uses 1 / (generation + 1).
-        No relative floor is applied after birth.
+        At each parameter insertion, fixed learning-rate and perturbation offsets
+        are determined by selecting a starting value between a reference-dependent
+        upper bound and a requested lower bound. Subsequent parameter updates
+        follow the corresponding shifted power-law schedules.
+
+        Parameters
+        ----------
+        learning_rate_reference : str, optional
+            Reference schedule for determining the learning-rate bounds.
+            Either ``"global"`` (original SPSA schedule) or ``"previous"``
+            (schedule of the preceding parameter generation).
+        perturbation_reference : str, optional
+            Reference schedule for determining the perturbation bounds.
+            Either ``"global"`` or ``"previous"``.
+        learning_rate_ratio : float, optional
+            Minimum requested learning-rate ratio relative to the reference
+            schedule at insertion. Must be >= 1.
+        perturbation_ratio : float, optional
+            Minimum requested perturbation ratio relative to the reference
+            schedule at insertion. Must be >= 1.
+        birth_position_rule : float | list[float] | str | Callable, optional
+            Rule determining the interpolation weight w_j for insertion j.
+            Supported forms are:
+            - float: Constant weight in [0, 1].
+            - list[float]: Successive weights, repeating the final value
+            when the list is exhausted.
+            - "harmonic": w_j = 1 / (j + 1).
+            - callable(j, k): Function returning a weight in [0, 1],
+            where j is the insertion index (starting at 1) and k is
+            the cumulative SPSA update count at insertion.
+            All parameters introduced in the same insertion share w_j.
+
+        Notes
+        -----
+        The selected starting value interpolates between the requested lower
+        bound and the reference schedule's initial value. If the requested
+        lower bound exceeds this maximum, the maximum is used instead.
+
+        The resulting offsets remain fixed throughout subsequent optimization.
+        No additional relative lower bound is enforced after insertion.
         """
         if self._initialized:
             raise RuntimeError("Configure birth schedules before initializing SPSA.")
@@ -875,26 +933,92 @@ class SPSA(StepwiseOptimizer):
                 not np.isfinite(ratio) or ratio < 1
             ):
                 raise ValueError(f"{label} must be finite and >= 1.")
-        if isinstance(birth_position_rule, str):
+
+        rule_callable = None
+
+        # Case 1: user-supplied callable
+        if callable(birth_position_rule):
+            rule_callable = birth_position_rule
+
+            spec_factory = getattr(
+                birth_position_rule, "birth_policy_spec", None
+            )
+
+            if callable(spec_factory):
+                rule = spec_factory()
+                if not isinstance(rule, dict):
+                    raise TypeError(
+                        "birth_policy_spec() must return a dictionary."
+                    )
+            else:
+                descriptor = getattr(
+                    birth_position_rule,
+                    "__qualname__",
+                    type(birth_position_rule).__qualname__,
+                )
+                module = getattr(
+                    birth_position_rule,
+                    "__module__",
+                    type(birth_position_rule).__module__,
+                )
+                rule = {
+                    "type": "callable",
+                    "name": f"{module}.{descriptor}",
+                }
+
+            try:
+                json.dumps(rule, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    "Birth-policy description must be JSON serializable."
+                ) from exc
+
+        # Case 2: built-in named rule
+        elif isinstance(birth_position_rule, str):
             if birth_position_rule != "harmonic":
                 raise ValueError("Unknown birth position rule; expected 'harmonic'.")
             rule: float | list[float] | str = birth_position_rule
         elif isinstance(birth_position_rule, (list, tuple)):
             if not birth_position_rule:
-                raise ValueError("birth_position_rule list cannot be empty.")
-            if any(isinstance(weight, bool) or not isinstance(weight, Real)
-                   for weight in birth_position_rule):
-                raise TypeError("All birth position weights must be real numbers.")
-            rule = [float(weight) for weight in birth_position_rule]
-            if any(not np.isfinite(weight) or not 0 <= weight <= 1
-                   for weight in rule):
-                raise ValueError("All birth position weights must be in [0, 1].")
-        elif isinstance(birth_position_rule, Real) and not isinstance(birth_position_rule, bool):
+                raise ValueError(
+                    "birth_position_rule list cannot be empty."
+                )
+
+            if any(
+                isinstance(w, bool) or not isinstance(w, Real)
+                for w in birth_position_rule
+            ):
+                raise TypeError("All birth weights must be real numbers.")
+
+            rule = [float(w) for w in birth_position_rule]
+
+            if any(
+                not np.isfinite(w) or not 0 <= w <= 1
+                for w in rule
+            ):
+                raise ValueError(
+                    "All birth weights must lie within [0, 1]."
+                )
+
+        # Case 4: constant weight
+        elif (
+            isinstance(birth_position_rule, Real)
+            and not isinstance(birth_position_rule, bool)
+        ):
             rule = float(birth_position_rule)
             if not np.isfinite(rule) or not 0 <= rule <= 1:
-                raise ValueError("birth_position_rule must be in [0, 1].")
+                raise ValueError(
+                    "birth_position_rule must lie within [0, 1]."
+                )
+
         else:
-            raise TypeError("birth_position_rule must be a number, list, or 'harmonic'.")
+            raise TypeError(
+                "birth_position_rule must be a number, list, "
+                "'harmonic', or callable."
+            )
+
+        self._birth_position_callable = rule_callable
+
         self._birth_schedule_config = {
             "learning_rate_reference": learning_rate_reference,
             "perturbation_reference": perturbation_reference,
@@ -902,7 +1026,11 @@ class SPSA(StepwiseOptimizer):
             "perturbation_ratio": float(perturbation_ratio),
             "birth_position_rule": rule,
         }
-        logger.info("Configured SPSA parameter birth schedules: %s", self._birth_schedule_config)
+
+        logger.info(
+            "Configured SPSA parameter birth schedules: %s",
+            self._birth_schedule_config,
+        )
 
     @staticmethod
     def calibrate(
