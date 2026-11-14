@@ -384,6 +384,9 @@ class SPSA(StepwiseOptimizer):
             Mapping from active parameter names to the number of cumulative
             SPSA updates completed when the parameter was introduced. If
             omitted, use the current metadata for the restored parameters.
+        birth_policy_state : dict | None, optional
+            Previously captured birth offsets, generation counter, and
+            previous-generation reference. Supply this for exact rollback.
         """
         if not self.uses_parameter_dependent_schedules:
             raise RuntimeError(
@@ -485,6 +488,11 @@ class SPSA(StepwiseOptimizer):
             for name in self._active_parameter_names
         }
         if self._birth_schedule_config is not None:
+            if self._last_birth_generation is not None and any(
+                name in self._active_parameter_names
+                for name in self._last_birth_generation["parameter_names"]
+            ):
+                self._last_birth_generation["schedule_age"] = 0
             logger.warning(
                 "Parameter schedule ages restarted; comparisons with global and "
                 "previous-generation trajectories may no longer be ordered."
@@ -554,7 +562,8 @@ class SPSA(StepwiseOptimizer):
         a, alpha, A = hp["a"], hp["alpha"], hp["stability_constant"]
         c, gamma = hp["c"], hp["gamma"]
         if any(x is None for x in (a, alpha, A, c, gamma)) or (
-            a <= 0 or c <= 0 or alpha <= 0 or gamma <= 0 or A <= -1
+            not all(np.isfinite(x) for x in (a, alpha, A, c, gamma))
+            or a <= 0 or c <= 0 or alpha <= 0 or gamma <= 0 or A <= -1
         ):
             raise ValueError(
                 "Birth schedules require positive power-series coefficients and "
