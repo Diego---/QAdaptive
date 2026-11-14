@@ -468,12 +468,12 @@ def test_previous_generation_caps_infeasible_birth_interval(caplog):
     optimizer.set_parameter_birth_schedules(
         learning_rate_reference="previous",
         perturbation_reference="previous",
-        learning_rate_ratio=1.2,
-        perturbation_ratio=1.2,
+        learning_rate_ratio=2.0,
+        perturbation_ratio=2.0,
         birth_position_rule=0.3,
     )
     optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
-    # One update is too short for a 20% increase under either schedule.
+    # One update is too short for a twofold increase under either schedule.
     optimizer._total_spsa_updates = 1
     optimizer.initialize(
         np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"]
