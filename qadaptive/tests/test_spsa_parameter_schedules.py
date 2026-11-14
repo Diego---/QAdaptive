@@ -368,211 +368,172 @@ def test_parameter_birth_outer_iterations_are_preserved_for_survivors():
     }
     
 
+@pytest.mark.parametrize("reference", ["global", "previous"])
 @pytest.mark.parametrize("age", [0, 1, 10, 50])
-def test_parameter_birth_offsets_follow_shifted_power_series(age):
+def test_birth_offsets_follow_fixed_shifted_power_laws(reference, age):
     a, alpha, A = 0.8, 0.5, 1.0
     c, gamma = 0.2, 0.25
-    beta_a, beta_c = 0.3, 0.1
-
     optimizer = SPSA(
         parameter_dependent_lr_schedule=True,
         parameter_dependent_perturbation_schedule=True,
     )
-
     optimizer.set_power_series_hyperparameters(
-        a=a,
-        alpha=alpha,
-        c=c,
-        gamma=gamma,
-        stability_constant=A,
+        a=a, alpha=alpha, c=c, gamma=gamma, stability_constant=A
     )
-
-    optimizer.set_parameter_birth_power_series(
-        learning_rate_exponent=beta_a,
-        perturbation_exponent=beta_c,
+    optimizer.set_parameter_birth_schedules(
+        learning_rate_reference=reference,
+        perturbation_reference=reference,
+        learning_rate_ratio=1.2,
+        perturbation_ratio=1.0,
+        birth_position_rule=0.4,
     )
-
+    optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
+    # Simulate 10 elapsed SPSA updates before growth.
+    optimizer._total_spsa_updates = 10
+    optimizer._parameter_schedule_steps["θ_0"] = 10
     optimizer.initialize(
-        np.zeros(1),
-        quadratic,
-        parameter_names=["θ_0"],
-        outer_iteration=0,
-    )
-
-    optimizer.initialize(
-        np.zeros(2),
-        quadratic,
-        parameter_names=["θ_0", "θ_1"],
-        outer_iteration=3,
-    )
-
-    # The original parameter is older than the newly introduced one.
-    optimizer._parameter_schedule_steps = {
-        "θ_0": age + 10,
-        "θ_1": age,
-    }
-
-    # Birth-dependent offsets for θ_1 (born at K=3).
-    s_a = (A + 1) * (4 ** (beta_a / alpha) - 1)
-    s_c = 4 ** (beta_c / gamma) - 1
-
-    expected_lr = [
-        a / (A + age + 11) ** alpha,
-        a / (A + age + 1 + s_a) ** alpha,
-    ]
-
-    expected_pert = [
-        c / (age + 11) ** gamma,
-        c / (age + 1 + s_c) ** gamma,
-    ]
-
-    np.testing.assert_allclose(
-        optimizer._get_parameter_learning_rates(),
-        expected_lr,
-    )
-
-    np.testing.assert_allclose(
-        optimizer._get_parameter_perturbations(),
-        expected_pert,
-    )
-
-    # At birth, the new parameter has the prescribed initial strength.
-    if age == 0:
-        assert expected_lr[1] == pytest.approx(
-            a / (A + 1) ** alpha / 4 ** beta_a
-        )
-        assert expected_pert[1] == pytest.approx(
-            c / 4 ** beta_c
-        )
-
-def test_birth_offsets_survive_growth_and_schedule_progression():
-    a, alpha = 0.4, 0.602
-    c, gamma = 0.1, 0.101
-    beta_a, beta_c = 0.5, 0.02
-
-    optimizer = SPSA(
-        parameter_dependent_lr_schedule=True,
-        parameter_dependent_perturbation_schedule=True,
-    )
-
-    optimizer.set_power_series_hyperparameters(
-        a=a, alpha=alpha, c=c, gamma=gamma,
-    )
-    optimizer.set_parameter_birth_power_series(
-        learning_rate_exponent=beta_a,
-        perturbation_exponent=beta_c,
-    )
-
-    # Start with θ_0 and train for 10 steps.
-    x = np.zeros(1)
-    optimizer.initialize(
-        x, quadratic,
-        parameter_names=["θ_0"],
-        outer_iteration=0,
-    )
-
-    for _ in range(10):
-        _, x, *_ = optimizer.step(x, quadratic)
-
-    assert optimizer.parameter_schedule_steps == {"θ_0": 10}
-
-    # Introduce θ_1 at outer iteration 1.
-    x = np.append(x, 0.0)
-    optimizer.initialize(
-        x, quadratic,
-        parameter_names=["θ_0", "θ_1"],
+        np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"],
         outer_iteration=1,
     )
-
-    assert optimizer.parameter_schedule_steps == {
-        "θ_0": 10,
-        "θ_1": 0,
-    }
-
-    # First update after growth.
-    _, x, *_ = optimizer.step(x, quadratic)
-
-    assert optimizer.last_parameter_schedule_steps_used == {
-        "θ_0": 10,
-        "θ_1": 0,
-    }
-
-    assert optimizer.last_parameter_learning_rates == pytest.approx({
-        "θ_0": a / 11**alpha,
-        "θ_1": a / 2**beta_a,
-    })
-
-    assert optimizer.last_parameter_perturbations == pytest.approx({
-        "θ_0": c / 11**gamma,
-        "θ_1": c / 2**beta_c,
-    })
-
-    # Continue for nine more updates.
-    for _ in range(9):
-        _, x, *_ = optimizer.step(x, quadratic)
-
-    assert optimizer.parameter_schedule_steps == {
-        "θ_0": 20,
-        "θ_1": 10,
-    }
-
-    # Both parameters have progressed by exactly 10 steps.
-    s_a = 2**(beta_a / alpha) - 1
-    s_c = 2**(beta_c / gamma) - 1
-
+    event = optimizer.last_birth_schedule_event
+    assert event["generation"] == 1
+    assert event["weight"] == pytest.approx(0.4)
+    offsets = optimizer.birth_schedule_state
+    offset_a = offsets["learning_rate_offsets"]["θ_1"]
+    offset_c = offsets["perturbation_offsets"]["θ_1"]
+    optimizer._parameter_schedule_steps = {"θ_0": age + 10, "θ_1": age}
     np.testing.assert_allclose(
         optimizer._get_parameter_learning_rates(),
-        [
-            a / 21**alpha,
-            a / (11 + s_a)**alpha,
-        ],
+        [a / (A + age + 11)**alpha, a / (age + offset_a + 1)**alpha],
     )
-
     np.testing.assert_allclose(
         optimizer._get_parameter_perturbations(),
-        [
-            c / 21**gamma,
-            c / (11 + s_c)**gamma,
-        ],
+        [c / (age + 11)**gamma, c / (age + offset_c + 1)**gamma],
     )
-    
-@pytest.mark.parametrize("schedule", ["learning_rate", "perturbation"])
-def test_birth_offsets_reject_overridden_schedules(schedule):
+    assert event["learning_rate"]["start"] == pytest.approx(
+        a / (offset_a + 1)**alpha
+    )
+    assert event["perturbation"]["start"] == pytest.approx(
+        c / (offset_c + 1)**gamma
+    )
+
+
+def test_birth_weight_list_repeats_last_value_and_tracks_insertion_batches():
     optimizer = SPSA(
         parameter_dependent_lr_schedule=True,
         parameter_dependent_perturbation_schedule=True,
     )
-
     optimizer.set_power_series_hyperparameters(
-        a=0.4,
-        alpha=0.602,
-        c=0.1,
-        gamma=0.101,
+        a=0.4, alpha=0.602, c=0.1, gamma=0.101
     )
-
-    optimizer.set_parameter_birth_power_series(
-        learning_rate_exponent=0.5,
-        perturbation_exponent=0.02,
+    optimizer.set_parameter_birth_schedules(
+        birth_position_rule=[0.8, 0.3],
+        learning_rate_ratio=1.0,
+        perturbation_ratio=1.0,
     )
-
-    if schedule == "learning_rate":
-        optimizer.set_learning_rate(0.1)
-    else:
-        optimizer.set_perturbation(0.1)
-
+    optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
+    assert optimizer.last_birth_schedule_event["kind"] == "initial"
+    assert optimizer.birth_schedule_state["generation_count"] == 0
+    optimizer._total_spsa_updates = 20
     optimizer.initialize(
-        np.zeros(1),
-        quadratic,
-        parameter_names=["θ_0"],
-        outer_iteration=1,
+        np.zeros(3), quadratic, parameter_names=["θ_0", "θ_1", "θ_2"]
     )
+    assert optimizer.last_birth_schedule_event["weight"] == pytest.approx(0.8)
+    assert optimizer.birth_schedule_state["generation_count"] == 1
+    optimizer.initialize(
+        np.zeros(3), quadratic, parameter_names=["θ_0", "θ_1", "θ_2"]
+    )
+    assert optimizer.last_birth_schedule_event is None
+    assert optimizer.birth_schedule_state["generation_count"] == 1
+    optimizer._total_spsa_updates = 40
+    optimizer.initialize(
+        np.zeros(4), quadratic, parameter_names=["θ_0", "θ_1", "θ_2", "θ_3"]
+    )
+    assert optimizer.last_birth_schedule_event["weight"] == pytest.approx(0.3)
+    optimizer._total_spsa_updates = 60
+    optimizer.initialize(
+        np.zeros(5), quadratic, parameter_names=["θ_0", "θ_1", "θ_2", "θ_3", "θ_4"]
+    )
+    assert optimizer.last_birth_schedule_event["weight"] == pytest.approx(0.3)
 
-    with pytest.raises(ValueError, match="power-series"):
-        if schedule == "learning_rate":
-            optimizer._get_parameter_learning_rates()
-        else:
-            optimizer._get_parameter_perturbations()
-    
+
+def test_previous_generation_caps_infeasible_birth_interval(caplog):
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    optimizer.set_power_series_hyperparameters(
+        a=0.4, alpha=0.602, c=0.1, gamma=0.101
+    )
+    optimizer.set_parameter_birth_schedules(
+        learning_rate_reference="previous",
+        perturbation_reference="previous",
+        learning_rate_ratio=1.2,
+        perturbation_ratio=1.2,
+        birth_position_rule=0.3,
+    )
+    optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
+    # One update is too short for a 20% increase under either schedule.
+    optimizer._total_spsa_updates = 1
+    optimizer.initialize(
+        np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"]
+    )
+    event = optimizer.last_birth_schedule_event
+    for key in ("learning_rate", "perturbation"):
+        metric = event[key]
+        assert metric["capped"] is True
+        assert metric["start"] == pytest.approx(metric["upper"])
+        assert metric["requested_lower"] > metric["upper"]
+    assert "exceeds maximum" in caplog.text
+
+
+def test_previous_generation_reference_survives_pruning_and_rollback():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    optimizer.set_power_series_hyperparameters(
+        a=0.4, alpha=0.602, c=0.1, gamma=0.101
+    )
+    optimizer.set_parameter_birth_schedules(
+        learning_rate_reference="previous",
+        perturbation_reference="previous",
+        birth_position_rule=0.5,
+    )
+    optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
+    optimizer._total_spsa_updates = 50
+    optimizer.initialize(
+        np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"]
+    )
+    prior = optimizer.birth_schedule_state
+    optimizer._total_spsa_updates = 80
+    optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
+    assert optimizer.birth_schedule_state["previous_generation"] == prior["previous_generation"]
+    optimizer.initialize(
+        np.zeros(2), quadratic, parameter_names=["θ_0", "θ_temp"]
+    )
+    assert optimizer.birth_schedule_state["generation_count"] == 2
+    optimizer.restore_parameter_schedules(
+        {"θ_0": 0}, birth_outer_iterations={"θ_0": 0},
+        birth_global_steps={"θ_0": 0},
+        birth_policy_state={
+            **prior,
+            "learning_rate_offsets": {"θ_0": prior["learning_rate_offsets"]["θ_0"]},
+            "perturbation_offsets": {"θ_0": prior["perturbation_offsets"]["θ_0"]},
+        },
+    )
+    assert optimizer.birth_schedule_state["generation_count"] == 1
+    assert optimizer.birth_schedule_state["previous_generation"] == prior["previous_generation"]
+    assert optimizer._total_spsa_updates == 80
+
+
+@pytest.mark.parametrize("bad", [[], [0.3, 1.1], -0.2, "unknown"])
+def test_invalid_birth_position_rule_rejected(bad):
+    optimizer = SPSA()
+    with pytest.raises((TypeError, ValueError)):
+        optimizer.set_parameter_birth_schedules(birth_position_rule=bad)
+
+
 def test_restart_parameter_schedules_preserves_birth_iterations():
     optimizer = make_optimizer()
 
