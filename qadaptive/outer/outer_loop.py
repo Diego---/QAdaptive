@@ -179,6 +179,7 @@ class ExperimentSnapshot:
     parameter_schedule_steps: dict[str, int] | None = None
     parameter_birth_outer_iterations: dict[str, int] | None = None
     parameter_birth_global_steps: dict[str, int] | None = None
+    birth_policy_state: dict[str, Any] | None = None
 
 @dataclass
 class ActionSpec:
