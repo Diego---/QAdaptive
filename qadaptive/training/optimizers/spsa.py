@@ -296,8 +296,10 @@ class SPSA(StepwiseOptimizer):
         return dict(self._last_parameter_perturbations)
     
     @property
-    def birth_schedule_state(self) -> dict[str, Any]:
-        """Serializable optimizer birth state for snapshots and rollback."""
+    def birth_schedule_state(self) -> dict[str, Any] | None:
+        """Birth state for rollback, or None when no birth policy is configured."""
+        if self._birth_schedule_config is None:
+            return None
         return deepcopy({
             "generation_count": self._birth_generation_count,
             "previous_generation": self._last_birth_generation,
