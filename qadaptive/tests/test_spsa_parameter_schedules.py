@@ -529,10 +529,59 @@ def test_previous_generation_reference_survives_pruning_and_rollback():
 
 @pytest.mark.parametrize("bad", [[], [0.3, 1.1], -0.2, "unknown"])
 def test_invalid_birth_position_rule_rejected(bad):
-    optimizer = SPSA()
+    optimizer = SPSA(parameter_dependent_lr_schedule=True)
     with pytest.raises((TypeError, ValueError)):
         optimizer.set_parameter_birth_schedules(birth_position_rule=bad)
 
+
+
+
+def test_disabled_birth_schedule_requires_parameter_dependent_mode():
+    optimizer = SPSA()
+    with pytest.raises(ValueError, match="parameter-dependent"):
+        optimizer.set_parameter_birth_schedules()
+
+
+def test_birth_policy_requires_power_series_and_blocks_custom_override():
+    optimizer = SPSA(parameter_dependent_lr_schedule=True)
+    optimizer.set_power_series_hyperparameters(
+        a=0.5, alpha=0.602, c=0.1, gamma=0.101
+    )
+    optimizer.set_parameter_birth_schedules()
+    with pytest.raises(RuntimeError, match="Custom learning-rate"):
+        optimizer.set_learning_rate(0.1)
+    with pytest.raises(RuntimeError, match="Custom perturbation"):
+        optimizer.set_perturbation(0.1)
+    optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
+    with pytest.raises(RuntimeError, match="before initializing"):
+        optimizer.set_parameter_birth_schedules(birth_position_rule=0.4)
+
+
+def test_birth_schedule_harmonic_default_and_global_ordering():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    optimizer.set_power_series_hyperparameters(
+        a=0.5, alpha=0.602, c=0.1, gamma=0.101
+    )
+    optimizer.set_parameter_birth_schedules(
+        birth_position_rule="harmonic",
+        learning_rate_ratio=1.2,
+        perturbation_ratio=1.2,
+    )
+    optimizer.initialize(np.zeros(1), quadratic, parameter_names=["θ_0"])
+    optimizer._total_spsa_updates = 100
+    optimizer._parameter_schedule_steps["θ_0"] = 100
+    optimizer.initialize(np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"])
+    assert optimizer.last_birth_schedule_event["weight"] == pytest.approx(0.5)
+    for age in (0, 10, 100):
+        optimizer._parameter_schedule_steps["θ_0"] = 100 + age
+        optimizer._parameter_schedule_steps["θ_1"] = age
+        lr = optimizer._get_parameter_learning_rates()
+        pert = optimizer._get_parameter_perturbations()
+        assert lr[1] > lr[0]
+        assert pert[1] > pert[0]
 
 def test_restart_parameter_schedules_preserves_birth_iterations():
     optimizer = make_optimizer()
