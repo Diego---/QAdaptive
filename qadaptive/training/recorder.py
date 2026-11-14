@@ -334,6 +334,18 @@ class InnerLoopRecorder:
         self._active_run.parameter_birth_outer_iterations = birth_mapping
         return self._active_run
 
+    def set_birth_schedule_event(self, event: Mapping[str, Any]) -> TrainingRunRecord:
+        """Attach the optimizer's decision for a newly introduced batch."""
+        if self._active_run is None:
+            raise RuntimeError("No active training run to annotate.")
+        payload = json.loads(json.dumps(dict(event)))
+        self._active_run.birth_schedule_event = payload
+        self._write_jsonl("birth_schedule_selected", {
+            "run_index": self._active_run.run_index,
+            "birth_schedule_event": payload,
+        })
+        return self._active_run
+
     def clear(self) -> None:
         """Discard all recorded runs while preserving recorder configuration."""
         if self._active_run is not None:
@@ -624,6 +636,7 @@ class InnerLoopRecorder:
             if record.outer_iteration is None
             else int(record.outer_iteration),
             "parameter_birth_outer_iterations": record.parameter_birth_outer_iterations,
+            "birth_schedule_event": record.birth_schedule_event,
             "action": record.action,
             "accepted_outer_step": record.accepted_outer_step,
             "note": record.note,
