@@ -591,6 +591,51 @@ def test_birth_schedule_harmonic_default_and_global_ordering():
         assert lr[1] > lr[0]
         assert pert[1] > pert[0]
 
+
+
+def test_previous_generation_reference_uses_restored_age_not_global_clock():
+    a, alpha = 0.5, 0.602
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    optimizer.set_power_series_hyperparameters(
+        a=a, alpha=alpha, c=0.1, gamma=0.101
+    )
+    optimizer.set_parameter_birth_schedules(
+        learning_rate_reference="previous",
+        perturbation_reference="previous",
+        birth_position_rule=0.5,
+    )
+    x = np.zeros(1)
+    optimizer.initialize(x, quadratic, parameter_names=["θ_0"])
+    optimizer.step(x, quadratic)
+    steps = optimizer.parameter_schedule_steps
+    births = optimizer.parameter_birth_outer_iterations
+    global_births = optimizer.parameter_birth_global_steps
+    snapshot = optimizer.birth_schedule_state
+
+    # A trial step consumes a global SPSA update but gets rolled back.
+    optimizer.step(x, quadratic)
+    assert optimizer._total_spsa_updates == 2
+    optimizer.restore_parameter_schedules(
+        steps, birth_outer_iterations=births,
+        birth_global_steps=global_births, birth_policy_state=snapshot
+    )
+    assert optimizer.birth_schedule_state == snapshot
+    optimizer.initialize(
+        np.zeros(2), quadratic, parameter_names=["θ_0", "θ_1"],
+        outer_iteration=1,
+    )
+    event = optimizer.last_birth_schedule_event
+    assert event["birth_global_step"] == 2
+    assert event["learning_rate"]["reference_current"] == pytest.approx(
+        a / 2**alpha
+    )
+    assert event["perturbation"]["reference_current"] == pytest.approx(
+        0.1 / 2**0.101
+    )
+
 def test_restart_parameter_schedules_preserves_birth_iterations():
     optimizer = make_optimizer()
 
