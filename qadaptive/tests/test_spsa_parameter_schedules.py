@@ -636,6 +636,32 @@ def test_previous_generation_reference_uses_restored_age_not_global_clock():
         0.1 / 2**0.101
     )
 
+
+
+def test_initial_generation_follows_global_schedule_from_nonzero_start():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    a, alpha, A, c, gamma = 0.6, 0.602, 10.0, 0.2, 0.101
+    optimizer.set_power_series_hyperparameters(
+        a=a, alpha=alpha, c=c, gamma=gamma, stability_constant=A
+    )
+    optimizer.set_parameter_birth_schedules()
+    optimizer.initialize(
+        np.zeros(1), quadratic, iteration_start=30,
+        parameter_names=["θ_0"],
+    )
+    assert optimizer._get_parameter_learning_rates()[0] == pytest.approx(
+        a / (30 + A + 1)**alpha
+    )
+    assert optimizer._get_parameter_perturbations()[0] == pytest.approx(
+        c / 31**gamma
+    )
+    event = optimizer.last_birth_schedule_event
+    assert event["birth_global_step"] == 30
+    assert event["generation"] == 0
+
 def test_restart_parameter_schedules_preserves_birth_iterations():
     optimizer = make_optimizer()
 
