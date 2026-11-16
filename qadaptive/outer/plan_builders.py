@@ -180,11 +180,6 @@ def build_nearest_neighbor_growth_plan(
 
     for insertion_number, pair in enumerate(pairs):
         target_qubits = list(pair)
-        circ_ind = insert_index_policy(
-            experiment,
-            target_qubits,
-            insertion_number,
-        )
 
         actions.append(
             ActionSpec(
@@ -192,7 +187,8 @@ def build_nearest_neighbor_growth_plan(
                 kwargs={
                     "block_name": block_name,
                     "qubits": target_qubits,
-                    "circ_ind": circ_ind,
+                    "insert_policy": insert_index_policy,
+                    "insertion_number": insertion_number,
                 },
                 label=f"{block_name}_{pair[0]}_{pair[1]}",
             )
