@@ -524,12 +524,20 @@ def test_previous_generation_reference_survives_pruning_and_rollback():
     )
     assert optimizer.birth_schedule_state["generation_count"] == 2
     optimizer.restore_parameter_schedules(
-        {"θ_0": 0}, birth_outer_iterations={"θ_0": 0},
+        {"θ_0": 0},
+        birth_outer_iterations={"θ_0": 0},
         birth_global_steps={"θ_0": 0},
         birth_policy_state={
             **prior,
-            "learning_rate_offsets": {"θ_0": prior["learning_rate_offsets"]["θ_0"]},
-            "perturbation_offsets": {"θ_0": prior["perturbation_offsets"]["θ_0"]},
+            "learning_rate_offsets": {
+                "θ_0": prior["learning_rate_offsets"]["θ_0"]
+            },
+            "perturbation_offsets": {
+                "θ_0": prior["perturbation_offsets"]["θ_0"]
+            },
+            "parameter_generations": {
+                "θ_0": prior["parameter_generations"]["θ_0"]
+            },
         },
     )
     assert optimizer.birth_schedule_state["generation_count"] == 1
@@ -918,3 +926,84 @@ def test_restoring_schedules_discards_rejected_birth_steps_without_rewinding_clo
             birth_global_steps={"θ_temp": 1},
         )
 
+def test_birth_generations_are_tracked_and_restored():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.5,
+        alpha=0.602,
+        c=0.1,
+        gamma=0.101,
+    )
+
+    optimizer.set_parameter_birth_schedules(
+        birth_position_rule=[0.01, 0.2],
+    )
+
+    def objective(x):
+        return float(np.sum(np.asarray(x) ** 2))
+
+    # Initial ansatz
+    optimizer.initialize(
+        np.zeros(2),
+        objective,
+        parameter_names=["theta_0", "theta_1"],
+        outer_iteration=0,
+    )
+
+    assert optimizer.parameter_birth_generations == {
+        "theta_0": 0,
+        "theta_1": 0,
+    }
+
+    # First insertion: two new parameters
+    optimizer.initialize(
+        np.zeros(4),
+        objective,
+        parameter_names=[
+            "theta_0", "theta_1",
+            "theta_2", "theta_3",
+        ],
+        outer_iteration=1,
+    )
+
+    expected = {
+        "theta_0": 0,
+        "theta_1": 0,
+        "theta_2": 1,
+        "theta_3": 1,
+    }
+
+    assert optimizer.parameter_birth_generations == expected
+
+    # Snapshot before the next insertion
+    saved_steps = optimizer.parameter_schedule_steps
+    saved_outer = optimizer.parameter_birth_outer_iterations
+    saved_global = optimizer.parameter_birth_global_steps
+    saved_policy = optimizer.birth_schedule_state
+
+    # Second insertion
+    optimizer.initialize(
+        np.zeros(5),
+        objective,
+        parameter_names=[
+            "theta_0", "theta_1",
+            "theta_2", "theta_3", "theta_4",
+        ],
+        outer_iteration=2,
+    )
+
+    assert optimizer.parameter_birth_generations["theta_4"] == 2
+
+    # Roll back to the previous generation state
+    optimizer.restore_parameter_schedules(
+        saved_steps,
+        birth_outer_iterations=saved_outer,
+        birth_global_steps=saved_global,
+        birth_policy_state=saved_policy,
+    )
+
+    assert optimizer.parameter_birth_generations == expected

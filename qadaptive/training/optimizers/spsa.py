@@ -162,6 +162,9 @@ class SPSA(StepwiseOptimizer):
         self._birth_position_callable: Callable[[int, int], float] | None = None
         self._birth_generation_count = 0
         self._last_birth_generation: dict[str, Any] | None = None
+        # Birth generation of each active parameter.
+        # Generation 0 corresponds to the initial ansatz.
+        self._parameter_birth_generations: dict[str, int] = {}
         self._parameter_birth_lr_offsets: dict[str, float] = {}
         self._parameter_birth_c_offsets: dict[str, float] = {}
         self._last_birth_schedule_event: dict[str, Any] | None = None
@@ -275,6 +278,11 @@ class SPSA(StepwiseOptimizer):
     def parameter_birth_global_steps(self) -> dict[str, int]:
         """Return global SPSA update counts when active parameters were introduced."""
         return dict(self._parameter_birth_global_steps)
+    
+    @property
+    def parameter_birth_generations(self) -> dict[str, int]:
+        """Return the birth generation of each active parameter."""
+        return dict(self._parameter_birth_generations)
 
     @property
     def last_parameter_schedule_steps_used(self) -> dict[str, int] | None:
@@ -307,6 +315,7 @@ class SPSA(StepwiseOptimizer):
             "previous_generation": self._last_birth_generation,
             "learning_rate_offsets": self._parameter_birth_lr_offsets,
             "perturbation_offsets": self._parameter_birth_c_offsets,
+            "parameter_generations": self._parameter_birth_generations,
         })
 
     @property
@@ -451,6 +460,7 @@ class SPSA(StepwiseOptimizer):
         self._parameter_birth_outer_iterations = dict(birth_outer_iterations)
         self._parameter_birth_global_steps = dict(birth_global_steps)
         self._active_parameter_names = tuple(schedule_steps)
+        
         if birth_policy_state is not None:
             offsets_a = dict(birth_policy_state["learning_rate_offsets"])
             offsets_c = dict(birth_policy_state["perturbation_offsets"])
@@ -460,6 +470,23 @@ class SPSA(StepwiseOptimizer):
             self._parameter_birth_c_offsets = {key: float(value) for key, value in offsets_c.items()}
             self._birth_generation_count = int(birth_policy_state["generation_count"])
             self._last_birth_generation = deepcopy(birth_policy_state["previous_generation"])
+            generations = birth_policy_state.get("parameter_generations")
+            if generations is not None:
+                if set(generations) != set(schedule_steps):
+                    raise ValueError(
+                        "Restored birth generations must match active parameter names."
+                    )
+                self._parameter_birth_generations = {
+                    name: int(generation)
+                    for name, generation in generations.items()
+                }
+            else:
+                # Compatibility with older snapshot dictionaries.
+                self._parameter_birth_generations = {
+                    name: self._parameter_birth_generations[name]
+                    for name in schedule_steps
+                    if name in self._parameter_birth_generations
+                }
         else:
             # Preserve survivor offsets for direct restore calls from older clients.
             self._parameter_birth_lr_offsets = {
@@ -469,6 +496,10 @@ class SPSA(StepwiseOptimizer):
             self._parameter_birth_c_offsets = {
                 name: self._parameter_birth_c_offsets[name]
                 for name in schedule_steps if name in self._parameter_birth_c_offsets
+            }
+            self._parameter_birth_generations = {
+                name: self._parameter_birth_generations[name]
+                for name in schedule_steps if name in self._parameter_birth_generations
             }
         self._last_birth_schedule_event = None
         
@@ -665,6 +696,7 @@ class SPSA(StepwiseOptimizer):
         for name in new_names:
             self._parameter_birth_lr_offsets[name] = float(offset_a)
             self._parameter_birth_c_offsets[name] = float(offset_c)
+            self._parameter_birth_generations[name] = generation
         self._birth_generation_count = generation
         self._last_birth_generation = {
             "generation": generation,
@@ -1309,6 +1341,11 @@ class SPSA(StepwiseOptimizer):
             }
             self._parameter_birth_c_offsets = {
                 name: offset for name, offset in self._parameter_birth_c_offsets.items()
+                if name in active
+            }
+            self._parameter_birth_generations = {
+                name: generation
+                for name, generation in self._parameter_birth_generations.items()
                 if name in active
             }
 
