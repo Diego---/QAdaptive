@@ -333,6 +333,11 @@ class SPSA(StepwiseOptimizer):
             "effective_learning_rate_offsets": self._parameter_effective_lr_offsets,
             "effective_perturbation_offsets": self._parameter_effective_c_offsets,
             "parameter_generations": self._parameter_birth_generations,
+            "rejuvenation_state": {
+                "target_step": self._rejuvenation_target_step,
+                "applied": self._rejuvenation_applied,
+                "last_event": self._last_rejuvenation_event,
+            },
         })
 
     @property
@@ -551,6 +556,20 @@ class SPSA(StepwiseOptimizer):
                 name: float(value)
                 for name, value in effective_c.items()
             }
+            
+            
+            # Restore the runtime state of the single rejuvenation event.
+            rejuvenation_state = birth_policy_state.get("rejuvenation_state")
+
+            if rejuvenation_state is not None:
+                self._rejuvenation_target_step = rejuvenation_state["target_step"]
+                self._rejuvenation_applied = bool(
+                    rejuvenation_state["applied"]
+                )
+                self._last_rejuvenation_event = deepcopy(
+                    rejuvenation_state["last_event"]
+                )
+
         else:
             # Preserve survivor offsets for direct restore calls from older clients.
             self._parameter_birth_lr_offsets = {
@@ -784,7 +803,29 @@ class SPSA(StepwiseOptimizer):
             "perturbation_start": float(start_c),
             "learning_rate_offset": float(offset_a),
             "perturbation_offset": float(offset_c),
-        }
+        }      
+  
+        # Arm the single rejuvenation event when its triggering
+        # parameter generation is introduced.
+        if (
+            self._rejuvenation_config is not None
+            and not self._rejuvenation_applied
+            and self._rejuvenation_target_step is None
+            and generation == self._rejuvenation_config["after_generation"]
+        ):
+            delay = self._rejuvenation_config["delay_updates"]
+
+            self._rejuvenation_target_step = birth_step + delay
+
+            logger.info(
+                "Armed SPSA rejuvenation after generation %d: "
+                "birth_step=%d, delay=%d, target_step=%d.",
+                generation,
+                birth_step,
+                delay,
+                self._rejuvenation_target_step,
+            )
+
         self._last_birth_schedule_event = {
             "kind": kind,
             "generation": generation,
@@ -1507,6 +1548,38 @@ class SPSA(StepwiseOptimizer):
         )
 
         return deepcopy(event)
+    
+    def _maybe_apply_parameter_rejuvenation(self) -> bool:
+        """
+        Apply the configured rejuvenation event when it becomes due.
+
+        Called before each SPSA update. The event becomes due once
+        the required number of completed updates has elapsed.
+
+        Returns
+        -------
+        bool
+            True if rejuvenation was applied during this call.
+        """
+        if self._rejuvenation_config is None:
+            return False
+
+        if self._rejuvenation_applied:
+            return False
+
+        target = self._rejuvenation_target_step
+
+        # The triggering generation has not yet been introduced.
+        if target is None:
+            return False
+
+        # The requested number of updates has not yet elapsed.
+        if self._total_spsa_updates < target:
+            return False
+
+        self._apply_parameter_rejuvenation()
+        return True
+
 
     @staticmethod
     def calibrate(
@@ -2222,7 +2295,17 @@ class SPSA(StepwiseOptimizer):
             Tuple ``(skip, x_next, fx_next, gradient_estimate, fx_estimate)``.
         """
         if not self._initialized:
-            self.initialize(np.asarray(x, dtype=float), loss_function, iteration_start=self.iteration, **kwargs)
+            self.initialize(
+                np.asarray(x, dtype=float), 
+                loss_function, 
+                iteration_start=self.iteration, 
+                **kwargs
+                )
+            
+        # Rejuvenation occurs before gradient estimation, so both
+        # the perturbation strengths and the learning rates of this
+        # update reflect the new effective offsets.
+        self._maybe_apply_parameter_rejuvenation()
 
         x = np.asarray(x, dtype=float)
         next_iteration = self.iteration + 1

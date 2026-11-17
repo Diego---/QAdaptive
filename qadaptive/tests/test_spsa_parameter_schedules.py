@@ -1469,3 +1469,222 @@ def test_learning_rate_rejuvenation_preserves_perturbations():
 
     assert event["perturbation"] is None
     assert event["learning_rate"] is not None
+
+
+@pytest.mark.parametrize("delay", [0, 2, 5])
+def test_rejuvenation_triggers_after_correct_number_of_updates(delay):
+    a, alpha, A = 0.5, 0.602, 0.0
+    c, gamma = 0.1, 0.101
+
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=a,
+        alpha=alpha,
+        c=c,
+        gamma=gamma,
+        stability_constant=A,
+    )
+
+    optimizer.set_parameter_birth_schedules(
+        birth_position_rule=0.1,
+    )
+
+    optimizer.set_parameter_rejuvenation(
+        after_generation=1,
+        delay_updates=delay,
+        learning_rate_weights={0: 0.8},
+        perturbation_weights={0: 0.6},
+        learning_rate_ratio=1.2,
+        perturbation_ratio=1.0,
+    )
+
+    # Generation zero: three SPSA updates.
+    x0 = np.zeros(1)
+    optimizer.initialize(
+        x0, quadratic, parameter_names=["theta_0"]
+    )
+
+    for _ in range(3):
+        _, x0, *_ = optimizer.step(x0, quadratic)
+
+    assert optimizer._total_spsa_updates == 3
+    assert optimizer._rejuvenation_target_step is None
+
+    # Introduce generation one at global step 3.
+    x1 = np.zeros(2)
+    optimizer.initialize(
+        x1,
+        quadratic,
+        parameter_names=["theta_0", "theta_1"],
+    )
+
+    target_step = 3 + delay
+
+    assert optimizer._rejuvenation_target_step == target_step
+    assert optimizer._rejuvenation_applied is False
+
+    # Perform precisely the requested number of updates.
+    for _ in range(delay):
+        _, x1, *_ = optimizer.step(x1, quadratic)
+        assert optimizer._rejuvenation_applied is False
+
+    assert optimizer._total_spsa_updates == target_step
+
+    names = list(optimizer._active_parameter_names)
+
+    before_a = dict(zip(
+        names, optimizer._get_parameter_learning_rates()
+    ))
+    before_c = dict(zip(
+        names, optimizer._get_parameter_perturbations()
+    ))
+
+    ages_before = optimizer.parameter_schedule_steps
+    birth_offsets_before = (
+        optimizer._parameter_birth_lr_offsets.copy(),
+        optimizer._parameter_birth_c_offsets.copy(),
+    )
+
+    # Expected global interpolation intervals.
+    a_max = a / (A + 1) ** alpha
+    a_global = a / (A + target_step + 1) ** alpha
+    a_lower = min(1.2 * a_global, a_max)
+
+    c_max = c
+    c_global = c / (target_step + 1) ** gamma
+    c_lower = min(c_global, c_max)
+
+    a_target = a_lower + 0.8 * (a_max - a_lower)
+    c_target = c_lower + 0.6 * (c_max - c_lower)
+
+    # This update must apply rejuvenation BEFORE calculating
+    # perturbations and learning rates.
+    _, x1, *_ = optimizer.step(x1, quadratic)
+
+    assert optimizer._rejuvenation_applied is True
+    assert optimizer._total_spsa_updates == target_step + 1
+
+    used_a = optimizer.last_parameter_learning_rates
+    used_c = optimizer.last_parameter_perturbations
+
+    assert used_a["theta_0"] == pytest.approx(
+        max(before_a["theta_0"], a_target)
+    )
+
+    assert used_c["theta_0"] == pytest.approx(
+        max(before_c["theta_0"], c_target)
+    )
+
+    # The unselected generation remains on its original schedule.
+    assert used_a["theta_1"] == pytest.approx(
+        before_a["theta_1"]
+    )
+    assert used_c["theta_1"] == pytest.approx(
+        before_c["theta_1"]
+    )
+
+    # Parameter ages advance normally by exactly one update.
+    for name in names:
+        assert (
+            optimizer.parameter_schedule_steps[name]
+            == ages_before[name] + 1
+        )
+
+    # Birth offsets remain immutable.
+    assert (
+        optimizer._parameter_birth_lr_offsets,
+        optimizer._parameter_birth_c_offsets,
+    ) == birth_offsets_before
+
+    event = optimizer.last_rejuvenation_event
+    assert event is not None
+    assert event["global_step"] == target_step
+    assert event["selected_generations"] == [0]
+
+    # Reinitializing must not cause the event to fire again.
+    optimizer.initialize(
+        x1,
+        quadratic,
+        parameter_names=names,
+    )
+
+    _, x1, *_ = optimizer.step(x1, quadratic)
+
+    assert optimizer._rejuvenation_applied is True
+    assert optimizer.last_rejuvenation_event == event
+
+def test_rejuvenation_runtime_state_survives_restore():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.5, alpha=0.602,
+        c=0.1, gamma=0.101,
+    )
+
+    optimizer.set_parameter_birth_schedules()
+
+    optimizer.set_parameter_rejuvenation(
+        after_generation=1,
+        delay_updates=0,
+        learning_rate_weights={0: 0.9},
+    )
+
+    optimizer.initialize(
+        np.zeros(1),
+        quadratic,
+        parameter_names=["theta_0"],
+    )
+
+    optimizer.initialize(
+        np.zeros(2),
+        quadratic,
+        parameter_names=["theta_0", "theta_1"],
+    )
+
+    # Snapshot the armed, unapplied state.
+    saved_steps = optimizer.parameter_schedule_steps
+    saved_outer = optimizer.parameter_birth_outer_iterations
+    saved_global = optimizer.parameter_birth_global_steps
+    saved_policy = optimizer.birth_schedule_state
+
+    assert optimizer._rejuvenation_target_step == 0
+    assert optimizer._rejuvenation_applied is False
+
+    # The next step automatically applies rejuvenation.
+    optimizer.step(np.zeros(2), quadratic)
+
+    assert optimizer._rejuvenation_applied is True
+
+    # Restore the earlier optimizer state.
+    optimizer.restore_parameter_schedules(
+        saved_steps,
+        birth_outer_iterations=saved_outer,
+        birth_global_steps=saved_global,
+        birth_policy_state=saved_policy,
+    )
+
+    assert optimizer._rejuvenation_target_step == 0
+    assert optimizer._rejuvenation_applied is False
+    assert optimizer.last_rejuvenation_event is None
+
+    assert (
+        optimizer._parameter_effective_lr_offsets
+        == saved_policy["effective_learning_rate_offsets"]
+    )
+    assert (
+        optimizer._parameter_effective_c_offsets
+        == saved_policy["effective_perturbation_offsets"]
+    )
+
+    # The restored event is eligible again.
+    optimizer.step(np.zeros(2), quadratic)
+
+    assert optimizer._rejuvenation_applied is True
+    assert optimizer.last_rejuvenation_event is not None
