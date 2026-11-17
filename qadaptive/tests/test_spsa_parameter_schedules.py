@@ -1715,3 +1715,180 @@ def test_restart_incompatible_with_rejuvenation():
 
     # The rejected restart must not alter schedule ages.
     assert optimizer.parameter_schedule_steps == before
+
+
+@pytest.mark.parametrize("prune_previous", [False, True])
+def test_previous_reference_after_rejuvenation(prune_previous):
+    """Later births use rejuvenated trajectories, even after pruning."""
+    from copy import deepcopy
+
+    a, alpha = 0.5, 0.602
+    c, gamma = 0.1, 0.101
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    optimizer.set_power_series_hyperparameters(
+        a=a, alpha=alpha, c=c, gamma=gamma,
+    )
+    optimizer.set_parameter_birth_schedules(
+        learning_rate_reference="previous",
+        perturbation_reference="previous",
+        birth_position_rule=[0.05, 0.1],
+    )
+    optimizer.set_parameter_rejuvenation(
+        after_generation=1,
+        delay_updates=2,
+        learning_rate_weights={1: 0.9},
+        perturbation_weights={1: 0.8},
+    )
+
+    x = np.zeros(1)
+    optimizer.initialize(x, quadratic, parameter_names=["theta_0"])
+    for _ in range(20):
+        _, x, *_ = optimizer.step(x, quadratic)
+
+    x = np.zeros(2)
+    optimizer.initialize(
+        x, quadratic, parameter_names=["theta_0", "theta_1"],
+    )
+    for _ in range(3):
+        _, x, *_ = optimizer.step(x, quadratic)
+
+    assert optimizer._rejuvenation_applied
+    assert optimizer.last_rejuvenation_event["global_step"] == 22
+
+    previous = deepcopy(optimizer._last_birth_generation)
+    for key in ("learning_rate", "perturbation"):
+        assert previous[key + "_anchor"] > previous[key + "_start"]
+
+    if prune_previous:
+        optimizer.initialize(
+            np.zeros(1), quadratic, parameter_names=["theta_0"],
+        )
+        assert "theta_1" not in optimizer.parameter_birth_generations
+
+    reference_state = deepcopy(optimizer._last_birth_generation)
+    names = (
+        ["theta_0", "theta_2"]
+        if prune_previous
+        else ["theta_0", "theta_1", "theta_2"]
+    )
+    optimizer.initialize(
+        np.zeros(len(names)), quadratic, parameter_names=names,
+    )
+
+    event = optimizer.last_birth_schedule_event
+    assert event["generation"] == 2
+    for key, scale, exponent in (
+        ("learning_rate", a, alpha),
+        ("perturbation", c, gamma),
+    ):
+        expected_ref = scale / (
+            reference_state["schedule_age"]
+            + reference_state[key + "_effective_offset"] + 1.0
+        ) ** exponent
+        expected_upper = reference_state[key + "_anchor"]
+        metric = event[key]
+
+        assert metric["reference_current"] == pytest.approx(expected_ref)
+        assert metric["upper"] == pytest.approx(expected_upper)
+        assert metric["effective_lower"] <= metric["start"]
+        assert metric["start"] <= metric["upper"]
+
+
+def test_restore_snapshot_without_rejuvenation_state():
+    """Legacy snapshots without rejuvenation metadata remain restorable."""
+    from copy import deepcopy
+
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    optimizer.set_power_series_hyperparameters(
+        a=0.5, alpha=0.602, c=0.1, gamma=0.101,
+    )
+    optimizer.set_parameter_birth_schedules()
+    optimizer.initialize(
+        np.zeros(1), quadratic, parameter_names=["theta_0"],
+    )
+
+    saved = deepcopy(optimizer.birth_schedule_state)
+    saved.pop("rejuvenation_state")
+    optimizer.restore_parameter_schedules(
+        optimizer.parameter_schedule_steps,
+        birth_outer_iterations=optimizer.parameter_birth_outer_iterations,
+        birth_global_steps=optimizer.parameter_birth_global_steps,
+        birth_policy_state=saved,
+    )
+
+    assert optimizer._rejuvenation_target_step is None
+    assert optimizer._rejuvenation_applied is False
+    assert optimizer.last_rejuvenation_event is None
+    assert optimizer.pop_rejuvenation_event() is None
+
+
+def test_rejuvenated_previous_reference_survives_snapshot_restore():
+    """Rollback restores the effective previous-generation anchor and offsets."""
+    from copy import deepcopy
+
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    optimizer.set_power_series_hyperparameters(
+        a=0.5, alpha=0.602, c=0.1, gamma=0.101,
+    )
+    optimizer.set_parameter_birth_schedules(
+        learning_rate_reference="previous",
+        perturbation_reference="previous",
+        birth_position_rule=0.1,
+    )
+    optimizer.set_parameter_rejuvenation(
+        after_generation=1,
+        delay_updates=0,
+        learning_rate_weights={1: 0.9},
+        perturbation_weights={1: 0.8},
+    )
+
+    x = np.zeros(1)
+    optimizer.initialize(x, quadratic, parameter_names=["theta_0"])
+    for _ in range(10):
+        _, x, *_ = optimizer.step(x, quadratic)
+    x = np.zeros(2)
+    optimizer.initialize(
+        x, quadratic, parameter_names=["theta_0", "theta_1"],
+    )
+    _, x, *_ = optimizer.step(x, quadratic)
+
+    steps = optimizer.parameter_schedule_steps
+    outer = optimizer.parameter_birth_outer_iterations
+    global_steps = optimizer.parameter_birth_global_steps
+    state = deepcopy(optimizer.birth_schedule_state)
+
+    optimizer.initialize(
+        np.zeros(3), quadratic,
+        parameter_names=["theta_0", "theta_1", "theta_trial"],
+    )
+    optimizer.restore_parameter_schedules(
+        steps,
+        birth_outer_iterations=outer,
+        birth_global_steps=global_steps,
+        birth_policy_state=state,
+    )
+    assert optimizer.birth_schedule_state == state
+
+    optimizer.initialize(
+        np.zeros(3), quadratic,
+        parameter_names=["theta_0", "theta_1", "theta_2"],
+    )
+    ref = state["previous_generation"]
+    event = optimizer.last_birth_schedule_event
+    assert event["learning_rate"]["reference_current"] == pytest.approx(
+        0.5 / (
+            ref["schedule_age"] + ref["learning_rate_effective_offset"] + 1.0
+        ) ** 0.602
+    )
+    assert event["learning_rate"]["upper"] == pytest.approx(
+        ref["learning_rate_anchor"]
+    )
