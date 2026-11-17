@@ -1688,3 +1688,30 @@ def test_rejuvenation_runtime_state_survives_restore():
 
     assert optimizer._rejuvenation_applied is True
     assert optimizer.last_rejuvenation_event is not None
+
+
+def test_restart_incompatible_with_rejuvenation():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+    optimizer.set_power_series_hyperparameters(
+        a=0.5, alpha=0.602, c=0.1, gamma=0.101,
+    )
+    optimizer.set_parameter_birth_schedules()
+    optimizer.set_parameter_rejuvenation(
+        after_generation=1,
+        delay_updates=10,
+        learning_rate_weights={0: 0.8},
+    )
+
+    optimizer.initialize(
+        np.zeros(1), quadratic, parameter_names=["theta_0"],
+    )
+    before = optimizer.parameter_schedule_steps
+
+    with pytest.raises(RuntimeError, match="incompatible"):
+        optimizer.restart_parameter_schedules()
+
+    # The rejected restart must not alter schedule ages.
+    assert optimizer.parameter_schedule_steps == before
