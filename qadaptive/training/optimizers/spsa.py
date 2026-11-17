@@ -167,6 +167,11 @@ class SPSA(StepwiseOptimizer):
         self._parameter_birth_generations: dict[str, int] = {}
         self._parameter_birth_lr_offsets: dict[str, float] = {}
         self._parameter_birth_c_offsets: dict[str, float] = {}
+        # Current offsets used to evaluate the parameter schedules.
+        # Initially identical to the birth offsets, but may change
+        # following a rejuvenation event.
+        self._parameter_effective_lr_offsets: dict[str, float] = {}
+        self._parameter_effective_c_offsets: dict[str, float] = {}
         self._last_birth_schedule_event: dict[str, Any] | None = None
 
         # Cumulative SPSA updates, independent of iteration-counter resets.
@@ -315,6 +320,8 @@ class SPSA(StepwiseOptimizer):
             "previous_generation": self._last_birth_generation,
             "learning_rate_offsets": self._parameter_birth_lr_offsets,
             "perturbation_offsets": self._parameter_birth_c_offsets,
+            "effective_learning_rate_offsets": self._parameter_effective_lr_offsets,
+            "effective_perturbation_offsets": self._parameter_effective_c_offsets,
             "parameter_generations": self._parameter_birth_generations,
         })
 
@@ -487,6 +494,42 @@ class SPSA(StepwiseOptimizer):
                     for name in schedule_steps
                     if name in self._parameter_birth_generations
                 }
+                
+            effective_a = dict(
+                birth_policy_state.get(
+                    "effective_learning_rate_offsets",
+                    offsets_a,
+                )
+            )
+
+            effective_c = dict(
+                birth_policy_state.get(
+                    "effective_perturbation_offsets",
+                    offsets_c,
+                )
+            )
+
+            if set(effective_a) != set(schedule_steps):
+                raise ValueError(
+                    "Restored effective learning-rate offsets must match "
+                    "active parameter names."
+                )
+
+            if set(effective_c) != set(schedule_steps):
+                raise ValueError(
+                    "Restored effective perturbation offsets must match "
+                    "active parameter names."
+                )
+
+            self._parameter_effective_lr_offsets = {
+                name: float(value)
+                for name, value in effective_a.items()
+            }
+
+            self._parameter_effective_c_offsets = {
+                name: float(value)
+                for name, value in effective_c.items()
+            }
         else:
             # Preserve survivor offsets for direct restore calls from older clients.
             self._parameter_birth_lr_offsets = {
@@ -496,6 +539,14 @@ class SPSA(StepwiseOptimizer):
             self._parameter_birth_c_offsets = {
                 name: self._parameter_birth_c_offsets[name]
                 for name in schedule_steps if name in self._parameter_birth_c_offsets
+            }
+            self._parameter_effective_lr_offsets = {
+                name: self._parameter_effective_lr_offsets[name]
+                for name in schedule_steps if name in self._parameter_effective_lr_offsets
+            }
+            self._parameter_effective_c_offsets = {
+                name: self._parameter_effective_c_offsets[name]
+                for name in schedule_steps if name in self._parameter_effective_c_offsets
             }
             self._parameter_birth_generations = {
                 name: self._parameter_birth_generations[name]
@@ -560,7 +611,7 @@ class SPSA(StepwiseOptimizer):
         alpha = self._hyperparameters["alpha"]
         return np.asarray([
             a / (self._parameter_schedule_steps[name]
-                 + self._parameter_birth_lr_offsets[name] + 1.0) ** alpha
+                 + self._parameter_effective_lr_offsets[name] + 1.0) ** alpha
             for name in self._active_parameter_names
         ], dtype=float)
 
@@ -580,7 +631,7 @@ class SPSA(StepwiseOptimizer):
         gamma = self._hyperparameters["gamma"]
         return np.asarray([
             c / (self._parameter_schedule_steps[name]
-                 + self._parameter_birth_c_offsets[name] + 1.0) ** gamma
+                 + self._parameter_effective_c_offsets[name] + 1.0) ** gamma
             for name in self._active_parameter_names
         ], dtype=float)
 
@@ -696,7 +747,12 @@ class SPSA(StepwiseOptimizer):
         for name in new_names:
             self._parameter_birth_lr_offsets[name] = float(offset_a)
             self._parameter_birth_c_offsets[name] = float(offset_c)
+
+            self._parameter_effective_lr_offsets[name] = float(offset_a)
+            self._parameter_effective_c_offsets[name] = float(offset_c)
+
             self._parameter_birth_generations[name] = generation
+
         self._birth_generation_count = generation
         self._last_birth_generation = {
             "generation": generation,
@@ -1334,20 +1390,43 @@ class SPSA(StepwiseOptimizer):
         )
         if self.uses_parameter_dependent_schedules:
             self._initialize_birth_schedules(new_parameter_names)
+
+            # Determine the active parameter identities BEFORE filtering.
             active = set(self._active_parameter_names)
+
+            # Keep birth offsets only for active parameters.
             self._parameter_birth_lr_offsets = {
-                name: offset for name, offset in self._parameter_birth_lr_offsets.items()
+                name: offset
+                for name, offset in self._parameter_birth_lr_offsets.items()
                 if name in active
             }
+
             self._parameter_birth_c_offsets = {
-                name: offset for name, offset in self._parameter_birth_c_offsets.items()
+                name: offset
+                for name, offset in self._parameter_birth_c_offsets.items()
                 if name in active
             }
+
+            # Keep effective offsets only for active parameters.
+            self._parameter_effective_lr_offsets = {
+                name: offset
+                for name, offset in self._parameter_effective_lr_offsets.items()
+                if name in active
+            }
+
+            self._parameter_effective_c_offsets = {
+                name: offset
+                for name, offset in self._parameter_effective_c_offsets.items()
+                if name in active
+            }
+
+            # Keep generation metadata only for active parameters.
             self._parameter_birth_generations = {
                 name: generation
                 for name, generation in self._parameter_birth_generations.items()
                 if name in active
             }
+
 
         self._active_lse_solver = np.linalg.solve if self.lse_solver is None else self.lse_solver
 

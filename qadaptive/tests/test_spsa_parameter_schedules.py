@@ -535,6 +535,12 @@ def test_previous_generation_reference_survives_pruning_and_rollback():
             "perturbation_offsets": {
                 "θ_0": prior["perturbation_offsets"]["θ_0"]
             },
+            "effective_learning_rate_offsets": {
+                "θ_0": prior["effective_learning_rate_offsets"]["θ_0"]
+            },
+            "effective_perturbation_offsets": {
+                "θ_0": prior["effective_perturbation_offsets"]["θ_0"]
+            },
             "parameter_generations": {
                 "θ_0": prior["parameter_generations"]["θ_0"]
             },
@@ -1007,3 +1013,89 @@ def test_birth_generations_are_tracked_and_restored():
     )
 
     assert optimizer.parameter_birth_generations == expected
+
+def test_birth_and_effective_offsets_are_independent():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.5,
+        alpha=0.602,
+        c=0.1,
+        gamma=0.101,
+    )
+
+    optimizer.set_parameter_birth_schedules(
+        birth_position_rule=0.2,
+    )
+
+    optimizer.initialize(
+        np.zeros(2),
+        quadratic,
+        parameter_names=["theta_0", "theta_1"],
+    )
+
+    # Initially, effective and birth offsets are identical.
+    assert (
+        optimizer._parameter_effective_lr_offsets
+        == optimizer._parameter_birth_lr_offsets
+    )
+
+    assert (
+        optimizer._parameter_effective_c_offsets
+        == optimizer._parameter_birth_c_offsets
+    )
+
+    # Save original state.
+    birth_a = optimizer._parameter_birth_lr_offsets.copy()
+    birth_c = optimizer._parameter_birth_c_offsets.copy()
+
+    original_lr = optimizer._get_parameter_learning_rates().copy()
+    original_c = optimizer._get_parameter_perturbations().copy()
+
+    # Simulate a future rejuvenation by modifying only
+    # the effective offsets.
+    optimizer._parameter_effective_lr_offsets["theta_0"] = 3.0
+    optimizer._parameter_effective_c_offsets["theta_1"] = 5.0
+
+    new_lr = optimizer._get_parameter_learning_rates()
+    new_c = optimizer._get_parameter_perturbations()
+
+    # The birth offsets remain unchanged.
+    assert optimizer._parameter_birth_lr_offsets == birth_a
+    assert optimizer._parameter_birth_c_offsets == birth_c
+
+    # Only the corresponding schedules change.
+    assert new_lr[0] != original_lr[0]
+    assert new_lr[1] == pytest.approx(original_lr[1])
+
+    assert new_c[0] == pytest.approx(original_c[0])
+    assert new_c[1] != original_c[1]
+
+    # Snapshot and restore the modified effective offsets.
+    saved_steps = optimizer.parameter_schedule_steps
+    saved_outer = optimizer.parameter_birth_outer_iterations
+    saved_global = optimizer.parameter_birth_global_steps
+    saved_policy = optimizer.birth_schedule_state
+
+    optimizer._parameter_effective_lr_offsets["theta_0"] = 0.0
+    optimizer._parameter_effective_c_offsets["theta_1"] = 0.0
+
+    optimizer.restore_parameter_schedules(
+        saved_steps,
+        birth_outer_iterations=saved_outer,
+        birth_global_steps=saved_global,
+        birth_policy_state=saved_policy,
+    )
+
+    np.testing.assert_allclose(
+        optimizer._get_parameter_learning_rates(),
+        new_lr,
+    )
+
+    np.testing.assert_allclose(
+        optimizer._get_parameter_perturbations(),
+        new_c,
+    )
