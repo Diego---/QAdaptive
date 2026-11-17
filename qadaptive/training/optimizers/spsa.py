@@ -582,19 +582,21 @@ class SPSA(StepwiseOptimizer):
             
             # Restore the runtime state of the single rejuvenation event.
             rejuvenation_state = birth_policy_state.get("rejuvenation_state")
-
             if rejuvenation_state is not None:
                 self._rejuvenation_target_step = rejuvenation_state["target_step"]
-                self._rejuvenation_applied = bool(
-                    rejuvenation_state["applied"]
-                )
+                self._rejuvenation_applied = bool(rejuvenation_state["applied"])
                 self._last_rejuvenation_event = deepcopy(
                     rejuvenation_state["last_event"]
                 )
-            
-            self._pending_rejuvenation_event = deepcopy(
-                rejuvenation_state.get("pending_event")
-            )
+                self._pending_rejuvenation_event = deepcopy(
+                    rejuvenation_state.get("pending_event")
+                )
+            else:
+                # Backward compatibility with snapshots predating rejuvenation.
+                self._rejuvenation_target_step = None
+                self._rejuvenation_applied = False
+                self._last_rejuvenation_event = None
+                self._pending_rejuvenation_event = None
 
         else:
             # Preserve survivor offsets for direct restore calls from older clients.
@@ -784,10 +786,20 @@ class SPSA(StepwiseOptimizer):
                     upper = scale / (base_offset + 1.0) ** power
                     current_ref = scale / (birth_step + base_offset + 1.0) ** power
                 else:
-                    upper = previous[key + "_start"]
+                    # Use the preceding generation's effective trajectory,
+                    # which may have changed at rejuvenation.
+                    effective_offset = previous.get(
+                        key + "_effective_offset",
+                        previous[key + "_offset"],
+                    )
+                    upper = previous.get(
+                        key + "_anchor",
+                        previous[key + "_start"],
+                    )
                     current_ref = scale / (
-                        previous_age + previous[key + "_offset"] + 1.0
+                        previous_age + effective_offset + 1.0
                     ) ** power
+                    upper = max(upper, current_ref)
                 requested_lower = cfg[ratio_key] * current_ref
                 capped = requested_lower > upper
                 effective_lower = min(requested_lower, upper)
@@ -835,6 +847,12 @@ class SPSA(StepwiseOptimizer):
             "perturbation_start": float(start_c),
             "learning_rate_offset": float(offset_a),
             "perturbation_offset": float(offset_c),
+            # Preserve birth information while tracking the effective
+            # trajectory and its largest birth/rejuvenation anchor.
+            "learning_rate_effective_offset": float(offset_a),
+            "perturbation_effective_offset": float(offset_c),
+            "learning_rate_anchor": float(start_a),
+            "perturbation_anchor": float(start_c),
         }      
   
         # Arm the single rejuvenation event when its triggering
@@ -1570,6 +1588,30 @@ class SPSA(StepwiseOptimizer):
         # Commit the schedule changes.
         self._parameter_effective_lr_offsets = new_lr_offsets
         self._parameter_effective_c_offsets = new_c_offsets
+
+        # Keep the last generation's historical reference synchronized if
+        # its parameters were among those rejuvenated. Its reference must
+        # remain available even if that generation is later pruned.
+        previous = self._last_birth_generation
+        if previous is not None:
+            for key, diagnostics, offsets in (
+                ("learning_rate", lr_event, new_lr_offsets),
+                ("perturbation", c_event, new_c_offsets),
+            ):
+                if diagnostics is None:
+                    continue
+
+                for name in previous["parameter_names"]:
+                    change = diagnostics["parameters"].get(name)
+                    if change is None:
+                        continue
+
+                    previous[key + "_effective_offset"] = float(offsets[name])
+                    previous[key + "_anchor"] = max(
+                        float(previous.get(key + "_anchor", previous[key + "_start"])),
+                        float(change["after"]),
+                    )
+                    break
 
         self._rejuvenation_applied = True
         self._last_rejuvenation_event = deepcopy(event)
