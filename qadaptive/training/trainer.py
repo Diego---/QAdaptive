@@ -316,6 +316,22 @@ class InnerLoopTrainer:
                     x,
                     **kwargs,
                 )
+                
+                # Collect a newly applied optimizer rejuvenation event.
+                # Other optimizers need not implement this interface.
+                pop_event = getattr(
+                    self.optimizer,
+                    "pop_rejuvenation_event",
+                    None,
+                )
+
+                if callable(pop_event):
+                    rejuvenation_event = pop_event()
+
+                    if rejuvenation_event is not None:
+                        self.recorder.add_rejuvenation_event(
+                            rejuvenation_event
+                        )
 
                 if skip:
                     logger.info(

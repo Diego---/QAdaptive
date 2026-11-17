@@ -373,3 +373,130 @@ def test_trainer_records_parameter_dependent_spsa_schedule_values():
     assert iteration.perturbations == pytest.approx(
         {name: 0.1 for name in names}
     )
+
+
+@pytest.mark.parametrize("blocking", [False, True])
+def test_trainer_records_rejuvenation_exactly_once(
+    tmp_path,
+    blocking,
+):
+    import json
+    from qiskit.circuit import Parameter
+
+    # First architecture: generation 0.
+    circuit0 = QuantumCircuit(1)
+    circuit0.rx(Parameter("theta_0"), 0)
+
+    # Second architecture: generation 1.
+    circuit1 = QuantumCircuit(1)
+    circuit1.rx(Parameter("theta_0"), 0)
+    circuit1.ry(Parameter("theta_1"), 0)
+
+    optimizer = SPSA(
+        blocking=blocking,
+        allowed_increase=-1e6 if blocking else None,
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.5,
+        alpha=0.602,
+        c=0.1,
+        gamma=0.101,
+    )
+
+    optimizer.set_parameter_birth_schedules(
+        birth_position_rule=0.1,
+    )
+
+    optimizer.set_parameter_rejuvenation(
+        after_generation=1,
+        delay_updates=1,
+        learning_rate_weights={0: 0.8},
+        perturbation_weights={0: 0.6},
+    )
+
+    jsonl_path = tmp_path / "training.jsonl"
+    recorder = InnerLoopRecorder(
+        jsonl_path=jsonl_path,
+    )
+
+    trainer = InnerLoopTrainer(
+        optimizer=optimizer,
+        recorder=recorder,
+    )
+
+    # Initial generation: perform one SPSA update.
+    trainer.train_one_time(
+        ansatz=circuit0,
+        loss_function=quadratic_loss,
+        initial_point=[0.2],
+        iterations=1,
+    )
+
+    assert optimizer._total_spsa_updates == 1
+    assert recorder.runs[0].rejuvenation_events == []
+
+    # Introduce generation 1 at global update count 1.
+    # The event is due after one further update, at count 2.
+    trainer.train_one_time(
+        ansatz=circuit1,
+        loss_function=quadratic_loss,
+        initial_point=[0.2, -0.1],
+        iterations=2,
+    )
+
+    assert optimizer._total_spsa_updates == 3
+
+    # Rejuvenation occurred exactly once, in the second run.
+    assert len(recorder.runs[1].rejuvenation_events) == 1
+
+    event = recorder.runs[1].rejuvenation_events[0]
+
+    assert event["global_step"] == 2
+    assert event["selected_generations"] == [0]
+    assert event == optimizer.last_rejuvenation_event
+
+    # The pending event was consumed by the trainer.
+    assert optimizer.pop_rejuvenation_event() is None
+
+    # The intervention survives full recorder serialization.
+    saved = recorder.to_dict()
+    assert saved["runs"][1]["rejuvenation_events"] == [event]
+
+    # It also appears exactly once as a JSONL lifecycle event.
+    lines = [
+        json.loads(line)
+        for line in jsonl_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+
+    logged_events = [
+        item
+        for item in lines
+        if item["event"] == "rejuvenation_applied"
+    ]
+
+    assert len(logged_events) == 1
+    assert logged_events[0]["run_index"] == 1
+    assert logged_events[0]["rejuvenation_event"] == event
+
+    # The blocking configuration rejects every update,
+    # but the optimizer-state event must still be recorded.
+    if blocking:
+        assert len(recorder.runs[1].iterations) == 0
+    else:
+        assert len(recorder.runs[1].iterations) == 2
+
+    # Continue training. No duplicate event is recorded.
+    trainer.train_one_time(
+        ansatz=circuit1,
+        loss_function=quadratic_loss,
+        initial_point=[0.2, -0.1],
+        iterations=1,
+    )
+
+    assert recorder.runs[2].rejuvenation_events == []
+    assert optimizer._rejuvenation_applied is True

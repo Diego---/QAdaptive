@@ -345,6 +345,38 @@ class InnerLoopRecorder:
             "birth_schedule_event": payload,
         })
         return self._active_run
+    
+    def add_rejuvenation_event(
+        self,
+        event: Mapping[str, Any],
+    ) -> TrainingRunRecord:
+        """
+        Attach a rejuvenation event to the active training run.
+
+        The event is copied into a JSON-compatible representation
+        and also written to the JSONL lifecycle log, if enabled.
+        """
+        if self._active_run is None:
+            raise RuntimeError(
+                "No active training run to annotate."
+            )
+
+        # Validate serialization and make an independent copy.
+        payload = json.loads(
+            json.dumps(dict(event), allow_nan=False)
+        )
+
+        self._active_run.rejuvenation_events.append(payload)
+
+        self._write_jsonl(
+            "rejuvenation_applied",
+            {
+                "run_index": self._active_run.run_index,
+                "rejuvenation_event": payload,
+            },
+        )
+
+        return self._active_run
 
     def clear(self) -> None:
         """Discard all recorded runs while preserving recorder configuration."""
@@ -637,6 +669,7 @@ class InnerLoopRecorder:
             else int(record.outer_iteration),
             "parameter_birth_outer_iterations": record.parameter_birth_outer_iterations,
             "birth_schedule_event": record.birth_schedule_event,
+            "rejuvenation_events": record.rejuvenation_events,
             "action": record.action,
             "accepted_outer_step": record.accepted_outer_step,
             "note": record.note,

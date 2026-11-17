@@ -182,6 +182,8 @@ class SPSA(StepwiseOptimizer):
         self._rejuvenation_target_step: int | None = None
         self._rejuvenation_applied: bool = False
         self._last_rejuvenation_event: dict[str, Any] | None = None
+        # Event awaiting delivery to the experiment recorder.
+        self._pending_rejuvenation_event: dict[str, Any] | None = None
 
         # Cumulative SPSA updates, independent of iteration-counter resets.
         self._total_spsa_updates: int = 0
@@ -337,6 +339,7 @@ class SPSA(StepwiseOptimizer):
                 "target_step": self._rejuvenation_target_step,
                 "applied": self._rejuvenation_applied,
                 "last_event": self._last_rejuvenation_event,
+                "pending_event": self._pending_rejuvenation_event,
             },
         })
 
@@ -355,6 +358,25 @@ class SPSA(StepwiseOptimizer):
     def last_rejuvenation_event(self) -> dict[str, Any] | None:
         """Return the most recent rejuvenation event, if any."""
         return deepcopy(self._last_rejuvenation_event)
+    
+
+    def pop_rejuvenation_event(self) -> dict[str, Any] | None:
+        """
+        Return and clear a newly applied rejuvenation event.
+
+        Unlike last_rejuvenation_event, which retains the most recent
+        event for inspection, this method returns each event at most once.
+
+        Returns
+        -------
+        dict | None
+            The pending rejuvenation event, or None when no new event
+            is available.
+        """
+        event = deepcopy(self._pending_rejuvenation_event)
+        self._pending_rejuvenation_event = None
+        return event
+
 
     def _reconcile_parameter_schedule_steps(
         self,
@@ -569,6 +591,10 @@ class SPSA(StepwiseOptimizer):
                 self._last_rejuvenation_event = deepcopy(
                     rejuvenation_state["last_event"]
                 )
+            
+            self._pending_rejuvenation_event = deepcopy(
+                rejuvenation_state.get("pending_event")
+            )
 
         else:
             # Preserve survivor offsets for direct restore calls from older clients.
@@ -1294,6 +1320,8 @@ class SPSA(StepwiseOptimizer):
                 raise ValueError(
                     f"{label} must be finite and >= 1."
                 )
+                
+        self._pending_rejuvenation_event = None
 
         def validate_weights(
             weights: Mapping[int, float] | None,
@@ -1539,6 +1567,7 @@ class SPSA(StepwiseOptimizer):
 
         self._rejuvenation_applied = True
         self._last_rejuvenation_event = deepcopy(event)
+        self._pending_rejuvenation_event = deepcopy(event)
 
         logger.info(
             "Applied SPSA schedule rejuvenation at global step %d "

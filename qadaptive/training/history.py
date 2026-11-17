@@ -49,6 +49,7 @@ class TrainingRunRecord:
     outer_iteration: int | None = None
     parameter_birth_outer_iterations: dict[str, int] | None = None
     birth_schedule_event: dict | None = None
+    rejuvenation_events: list[dict] = field(default_factory=list)
     action: str | None = None
     accepted_outer_step: bool | None = None
     note: str | None = None
