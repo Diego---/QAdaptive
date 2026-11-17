@@ -1099,3 +1099,138 @@ def test_birth_and_effective_offsets_are_independent():
         optimizer._get_parameter_perturbations(),
         new_c,
     )
+
+
+def test_parameter_rejuvenation_configuration():
+    import json
+
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.5,
+        alpha=0.602,
+        c=0.1,
+        gamma=0.101,
+    )
+
+    optimizer.set_parameter_birth_schedules(
+        birth_position_rule=[0.01, 0.005, 0.2],
+    )
+
+    optimizer.set_parameter_rejuvenation(
+        after_generation=11,
+        delay_updates=50,
+        learning_rate_weights={
+            0: 0.9,
+            1: 0.7,
+            2: 0.5,
+            3: 0.3,
+            4: 0.15,
+        },
+        perturbation_weights=None,
+        learning_rate_ratio=1.2,
+    )
+
+    config = optimizer.parameter_rejuvenation_config
+
+    assert config["after_generation"] == 11
+    assert config["delay_updates"] == 50
+
+    assert config["learning_rate_weights"] == {
+        "0": 0.9,
+        "1": 0.7,
+        "2": 0.5,
+        "3": 0.3,
+        "4": 0.15,
+    }
+
+    assert config["perturbation_weights"] is None
+    assert config["learning_rate_ratio"] == pytest.approx(1.2)
+
+    # Configuration must survive JSON round-tripping.
+    assert json.loads(json.dumps(config)) == config
+
+    # The settings property exposes the same policy.
+    assert optimizer.settings["parameter_rejuvenation"] == config
+
+    # No rejuvenation has occurred.
+    assert optimizer._rejuvenation_target_step is None
+    assert optimizer._rejuvenation_applied is False
+    assert optimizer.last_rejuvenation_event is None
+
+    # Returned dictionaries must not expose mutable internal state.
+    config["learning_rate_weights"]["0"] = 0.0
+
+    assert (
+        optimizer.parameter_rejuvenation_config[
+            "learning_rate_weights"
+        ]["0"] == pytest.approx(0.9)
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"after_generation": 0},
+        {"after_generation": True},
+        {"delay_updates": -1},
+        {"delay_updates": True},
+        {"learning_rate_weights": {12: 0.5}},
+        {"learning_rate_weights": {-1: 0.5}},
+        {"learning_rate_weights": {0: -0.1}},
+        {"learning_rate_weights": {0: 1.1}},
+        {"learning_rate_weights": {0: float("nan")}},
+        {"learning_rate_weights": {}},
+        {"learning_rate_ratio": 0.9},
+        {"perturbation_ratio": float("inf")},
+    ],
+)
+def test_invalid_rejuvenation_configuration(kwargs):
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.5, alpha=0.602, c=0.1, gamma=0.101,
+    )
+    optimizer.set_parameter_birth_schedules()
+
+    config = {
+        "after_generation": 11,
+        "delay_updates": 50,
+        "learning_rate_weights": {0: 0.5},
+    }
+    config.update(kwargs)
+
+    with pytest.raises((TypeError, ValueError)):
+        optimizer.set_parameter_rejuvenation(**config)
+
+def test_rejuvenation_requires_enabled_schedule():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=False,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.5, alpha=0.602, c=0.1, gamma=0.101,
+    )
+    optimizer.set_parameter_birth_schedules()
+
+    # Learning-rate rejuvenation is permitted.
+    optimizer.set_parameter_rejuvenation(
+        after_generation=2,
+        delay_updates=10,
+        learning_rate_weights={0: 0.5},
+    )
+
+    # Perturbation rejuvenation is not permitted.
+    with pytest.raises(ValueError, match="perturbation_schedule=True"):
+        optimizer.set_parameter_rejuvenation(
+            after_generation=2,
+            delay_updates=10,
+            perturbation_weights={0: 0.5},
+        )

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Mapping
 from copy import deepcopy
 from collections.abc import Callable, Iterator
-from numbers import Real
+from numbers import Real, Integral
 from time import time
 from typing import Any
 import itertools
@@ -173,6 +174,14 @@ class SPSA(StepwiseOptimizer):
         self._parameter_effective_lr_offsets: dict[str, float] = {}
         self._parameter_effective_c_offsets: dict[str, float] = {}
         self._last_birth_schedule_event: dict[str, Any] | None = None
+        
+        # Optional single-event, generation-wise schedule rejuvenation.
+        self._rejuvenation_config: dict[str, Any] | None = None
+
+        # Runtime state; populated when the triggering generation is born.
+        self._rejuvenation_target_step: int | None = None
+        self._rejuvenation_applied: bool = False
+        self._last_rejuvenation_event: dict[str, Any] | None = None
 
         # Cumulative SPSA updates, independent of iteration-counter resets.
         self._total_spsa_updates: int = 0
@@ -234,6 +243,7 @@ class SPSA(StepwiseOptimizer):
             "parameter_dependent_lr_schedule": self.parameter_dependent_lr_schedule,
             "parameter_dependent_perturbation_schedule": self.parameter_dependent_perturbation_schedule,
             "parameter_birth_schedules": deepcopy(self._birth_schedule_config),
+            "parameter_rejuvenation": deepcopy(self._rejuvenation_config),
             "last_avg": self.last_avg,
             "resamplings": self.resamplings,
             "perturbation_dims": self.perturbation_dims,
@@ -329,6 +339,17 @@ class SPSA(StepwiseOptimizer):
     def last_birth_schedule_event(self) -> dict[str, Any] | None:
         """Return the birth decision from the most recent initialize, if any."""
         return deepcopy(self._last_birth_schedule_event)
+    
+    @property
+    def parameter_rejuvenation_config(self) -> dict[str, Any] | None:
+        """Return the configured rejuvenation policy."""
+        return deepcopy(self._rejuvenation_config)
+
+
+    @property
+    def last_rejuvenation_event(self) -> dict[str, Any] | None:
+        """Return the most recent rejuvenation event, if any."""
+        return deepcopy(self._last_rejuvenation_event)
 
     def _reconcile_parameter_schedule_steps(
         self,
@@ -1118,6 +1139,189 @@ class SPSA(StepwiseOptimizer):
         logger.info(
             "Configured SPSA parameter birth schedules: %s",
             self._birth_schedule_config,
+        )
+
+    def set_parameter_rejuvenation(
+        self,
+        after_generation: int,
+        delay_updates: int,
+        learning_rate_weights: Mapping[int, float] | None = None,
+        perturbation_weights: Mapping[int, float] | None = None,
+        learning_rate_ratio: float = 1.2,
+        perturbation_ratio: float = 1.0,
+    ) -> None:
+        """
+        Configure one generation-wise SPSA schedule rejuvenation event.
+
+        The event is scheduled after a specified insertion generation,
+        followed by a fixed number of completed SPSA updates.
+
+        Selected generations share a global reference interval but can
+        have different interpolation weights. Learning-rate and
+        perturbation schedules are configured independently.
+
+        Parameters
+        ----------
+        after_generation : int
+            Insertion generation that triggers the countdown.
+            Generation 0 is the initial ansatz, so this must be >= 1.
+        delay_updates : int
+            Number of SPSA updates after the triggering insertion
+            before rejuvenation occurs. Must be >= 0.
+        learning_rate_weights : Mapping[int, float] | None
+            Generation-to-weight mapping for learning-rate rejuvenation.
+            None disables learning-rate rejuvenation.
+        perturbation_weights : Mapping[int, float] | None
+            Generation-to-weight mapping for perturbation rejuvenation.
+            None disables perturbation rejuvenation.
+        learning_rate_ratio : float
+            Lower-bound multiplier relative to the global learning-rate
+            schedule at the rejuvenation event. Must be >= 1.
+        perturbation_ratio : float
+            Lower-bound multiplier relative to the global perturbation
+            schedule at the rejuvenation event. Must be >= 1.
+
+        Notes
+        -----
+        The schedule values will be re-anchored by modifying effective
+        offsets, without changing parameter ages or parameter values.
+
+        This method only configures rejuvenation. Execution occurs
+        automatically during subsequent SPSA training.
+        """
+        if self._initialized or self._total_spsa_updates > 0:
+            raise RuntimeError(
+                "Configure rejuvenation before initializing SPSA."
+            )
+
+        if self._birth_schedule_config is None:
+            raise RuntimeError(
+                "Configure parameter birth schedules before rejuvenation."
+            )
+
+        if (
+            isinstance(after_generation, bool)
+            or not isinstance(after_generation, Integral)
+            or after_generation < 1
+        ):
+            raise ValueError(
+                "after_generation must be a positive integer."
+            )
+
+        if (
+            isinstance(delay_updates, bool)
+            or not isinstance(delay_updates, Integral)
+            or delay_updates < 0
+        ):
+            raise ValueError(
+                "delay_updates must be a non-negative integer."
+            )
+
+        if learning_rate_weights is None and perturbation_weights is None:
+            raise ValueError(
+                "At least one rejuvenation weight mapping is required."
+            )
+
+        if (
+            learning_rate_weights is not None
+            and not self.parameter_dependent_lr_schedule
+        ):
+            raise ValueError(
+                "Learning-rate rejuvenation requires "
+                "parameter_dependent_lr_schedule=True."
+            )
+
+        if (
+            perturbation_weights is not None
+            and not self.parameter_dependent_perturbation_schedule
+        ):
+            raise ValueError(
+                "Perturbation rejuvenation requires "
+                "parameter_dependent_perturbation_schedule=True."
+            )
+
+        for label, ratio in (
+            ("learning_rate_ratio", learning_rate_ratio),
+            ("perturbation_ratio", perturbation_ratio),
+        ):
+            if (
+                isinstance(ratio, bool)
+                or not isinstance(ratio, Real)
+                or not np.isfinite(ratio)
+                or ratio < 1
+            ):
+                raise ValueError(
+                    f"{label} must be finite and >= 1."
+                )
+
+        def validate_weights(
+            weights: Mapping[int, float] | None,
+            label: str,
+        ) -> dict[str, float] | None:
+            if weights is None:
+                return None
+
+            if not isinstance(weights, Mapping) or not weights:
+                raise ValueError(
+                    f"{label} must be a non-empty mapping."
+                )
+
+            validated = {}
+
+            for generation, weight in weights.items():
+                if (
+                    isinstance(generation, bool)
+                    or not isinstance(generation, Integral)
+                    or not 0 <= generation <= after_generation
+                ):
+                    raise ValueError(
+                        f"{label} contains invalid generation "
+                        f"{generation!r}."
+                    )
+
+                if (
+                    isinstance(weight, bool)
+                    or not isinstance(weight, Real)
+                    or not np.isfinite(weight)
+                    or not 0 <= weight <= 1
+                ):
+                    raise ValueError(
+                        f"{label}[{generation}] must be "
+                        "a finite weight in [0, 1]."
+                    )
+
+                # String keys make JSON serialization unambiguous.
+                validated[str(int(generation))] = float(weight)
+
+            return validated
+
+        lr_weights = validate_weights(
+            learning_rate_weights,
+            "learning_rate_weights",
+        )
+
+        c_weights = validate_weights(
+            perturbation_weights,
+            "perturbation_weights",
+        )
+
+        self._rejuvenation_config = {
+            "after_generation": int(after_generation),
+            "delay_updates": int(delay_updates),
+            "learning_rate_weights": lr_weights,
+            "perturbation_weights": c_weights,
+            "learning_rate_ratio": float(learning_rate_ratio),
+            "perturbation_ratio": float(perturbation_ratio),
+        }
+
+        # A newly configured policy has not yet been armed or applied.
+        self._rejuvenation_target_step = None
+        self._rejuvenation_applied = False
+        self._last_rejuvenation_event = None
+
+        logger.info(
+            "Configured SPSA parameter rejuvenation: %s",
+            self._rejuvenation_config,
         )
 
     @staticmethod
