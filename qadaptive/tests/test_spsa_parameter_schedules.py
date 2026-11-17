@@ -1234,3 +1234,238 @@ def test_rejuvenation_requires_enabled_schedule():
             delay_updates=10,
             perturbation_weights={0: 0.5},
         )
+
+
+def test_generation_wise_rejuvenation_values():
+    import json
+
+    a, alpha, A = 0.5, 0.602, 0.0
+    c, gamma = 0.1, 0.101
+
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=a,
+        alpha=alpha,
+        c=c,
+        gamma=gamma,
+        stability_constant=A,
+    )
+
+    optimizer.set_parameter_birth_schedules(
+        birth_position_rule=[0.1, 0.2],
+    )
+
+    optimizer.set_parameter_rejuvenation(
+        after_generation=2,
+        delay_updates=20,
+        learning_rate_weights={
+            0: 0.8,
+            1: 0.1,
+        },
+        perturbation_weights={
+            0: 0.6,
+        },
+        learning_rate_ratio=1.2,
+        perturbation_ratio=1.0,
+    )
+
+    names0 = ["theta_0", "theta_1"]
+    names1 = names0 + ["theta_2", "theta_3"]
+    names2 = names1 + ["theta_4"]
+
+    # Initial generation: global step 0.
+    optimizer.initialize(
+        np.zeros(2),
+        quadratic,
+        parameter_names=names0,
+    )
+
+    # First insertion: global step 20.
+    optimizer._total_spsa_updates = 20
+    optimizer.initialize(
+        np.zeros(4),
+        quadratic,
+        parameter_names=names1,
+    )
+
+    # Second insertion: global step 60.
+    optimizer._total_spsa_updates = 60
+    optimizer.initialize(
+        np.zeros(5),
+        quadratic,
+        parameter_names=names2,
+    )
+
+    # Simulate 20 additional updates.
+    optimizer._total_spsa_updates = 80
+
+    optimizer._parameter_schedule_steps = {
+        "theta_0": 80,
+        "theta_1": 80,
+        "theta_2": 60,
+        "theta_3": 60,
+        "theta_4": 20,
+    }
+
+    assert optimizer.parameter_birth_generations == {
+        "theta_0": 0,
+        "theta_1": 0,
+        "theta_2": 1,
+        "theta_3": 1,
+        "theta_4": 2,
+    }
+
+    before_a = dict(zip(
+        names2,
+        optimizer._get_parameter_learning_rates(),
+    ))
+
+    before_c = dict(zip(
+        names2,
+        optimizer._get_parameter_perturbations(),
+    ))
+
+    birth_a = optimizer._parameter_birth_lr_offsets.copy()
+    birth_c = optimizer._parameter_birth_c_offsets.copy()
+    ages = optimizer.parameter_schedule_steps.copy()
+    nfev = optimizer.nfev
+
+    # Independent global interpolation bounds.
+    a_max = a / (A + 1) ** alpha
+    a_global = a / (A + 80 + 1) ** alpha
+    a_lower = min(1.2 * a_global, a_max)
+
+    c_max = c
+    c_global = c / (80 + 1) ** gamma
+    c_lower = min(c_global, c_max)
+
+    targets_a = {
+        0: a_lower + 0.8 * (a_max - a_lower),
+        1: a_lower + 0.1 * (a_max - a_lower),
+    }
+
+    target_c_0 = c_lower + 0.6 * (c_max - c_lower)
+
+    # Apply the operation.
+    event = optimizer._apply_parameter_rejuvenation()
+
+    after_a = dict(zip(
+        names2,
+        optimizer._get_parameter_learning_rates(),
+    ))
+
+    after_c = dict(zip(
+        names2,
+        optimizer._get_parameter_perturbations(),
+    ))
+
+    # All parameters in a selected generation use the
+    # same target, subject to the no-decrease safeguard.
+    for name in names2:
+        generation = optimizer.parameter_birth_generations[name]
+
+        if generation in targets_a:
+            expected_a = max(
+                before_a[name],
+                targets_a[generation],
+            )
+        else:
+            expected_a = before_a[name]
+
+        if generation == 0:
+            expected_c = max(
+                before_c[name],
+                target_c_0,
+            )
+        else:
+            expected_c = before_c[name]
+
+        assert after_a[name] == pytest.approx(expected_a)
+        assert after_c[name] == pytest.approx(expected_c)
+
+    # Birth metadata and ages are immutable under rejuvenation.
+    assert optimizer._parameter_birth_lr_offsets == birth_a
+    assert optimizer._parameter_birth_c_offsets == birth_c
+    assert optimizer.parameter_schedule_steps == ages
+
+    # No objective evaluations are needed.
+    assert optimizer.nfev == nfev
+
+    # Event metadata is complete and JSON serializable.
+    assert event["global_step"] == 80
+    assert event["selected_generations"] == [0, 1]
+    assert event["perturbation"]["parameters"].keys() == {
+        "theta_0", "theta_1"
+    }
+
+    assert json.loads(json.dumps(event)) == event
+
+    # A second application is forbidden.
+    with pytest.raises(RuntimeError, match="already been applied"):
+        optimizer._apply_parameter_rejuvenation()
+
+def test_learning_rate_rejuvenation_preserves_perturbations():
+    optimizer = SPSA(
+        parameter_dependent_lr_schedule=True,
+        parameter_dependent_perturbation_schedule=True,
+    )
+
+    optimizer.set_power_series_hyperparameters(
+        a=0.5,
+        alpha=0.602,
+        c=0.1,
+        gamma=0.101,
+    )
+
+    optimizer.set_parameter_birth_schedules()
+
+    optimizer.set_parameter_rejuvenation(
+        after_generation=1,
+        delay_updates=0,
+        learning_rate_weights={0: 0.9},
+        perturbation_weights=None,
+    )
+
+    optimizer.initialize(
+        np.zeros(1),
+        quadratic,
+        parameter_names=["theta_0"],
+    )
+
+    optimizer._total_spsa_updates = 50
+
+    optimizer.initialize(
+        np.zeros(2),
+        quadratic,
+        parameter_names=["theta_0", "theta_1"],
+    )
+
+    # Simulate the original generation having aged 50 updates.
+    optimizer._parameter_schedule_steps["theta_0"] = 50
+
+    perturbation_offsets_before = (
+        optimizer._parameter_effective_c_offsets.copy()
+    )
+
+    perturbations_before = (
+        optimizer._get_parameter_perturbations().copy()
+    )
+
+    event = optimizer._apply_parameter_rejuvenation()
+
+    assert (
+        optimizer._parameter_effective_c_offsets
+        == perturbation_offsets_before
+    )
+
+    np.testing.assert_array_equal(
+        optimizer._get_parameter_perturbations(),
+        perturbations_before,
+    )
+
+    assert event["perturbation"] is None
+    assert event["learning_rate"] is not None

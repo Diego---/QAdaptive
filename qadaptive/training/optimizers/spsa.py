@@ -1323,6 +1323,190 @@ class SPSA(StepwiseOptimizer):
             "Configured SPSA parameter rejuvenation: %s",
             self._rejuvenation_config,
         )
+        
+    def _apply_parameter_rejuvenation(self) -> dict[str, Any]:
+        """
+        Apply the configured single-event schedule rejuvenation.
+
+        This operation uses the current cumulative SPSA update count
+        as the global reference iteration.
+
+        Only effective schedule offsets are modified. Birth offsets,
+        parameter ages, parameter values, and the SPSA update counter
+        remain unchanged.
+
+        Automatic event triggering is handled separately.
+        """
+        cfg = self._rejuvenation_config
+
+        if cfg is None:
+            raise RuntimeError(
+                "No parameter rejuvenation policy is configured."
+            )
+
+        if not self._initialized:
+            raise RuntimeError(
+                "SPSA must be initialized before rejuvenation."
+            )
+
+        if self._rejuvenation_applied:
+            raise RuntimeError(
+                "The configured rejuvenation event has already been applied."
+            )
+
+        if self._birth_generation_count < cfg["after_generation"]:
+            raise RuntimeError(
+                "The triggering parameter generation has not yet been introduced."
+            )
+
+        self._validate_parameter_schedule_state()
+
+        k = self._total_spsa_updates
+        hp = self._hyperparameters
+
+        def rejuvenate_schedule(
+            weights: dict[str, float] | None,
+            ratio: float,
+            scale: float,
+            exponent: float,
+            base_offset: float,
+            effective_offsets: dict[str, float],
+        ) -> tuple[dict[str, Any] | None, dict[str, float]]:
+            """
+            Calculate rejuvenated offsets for one schedule quantity.
+
+            Returns the event diagnostics and a new offset mapping.
+            The original mapping is not modified.
+            """
+            updated_offsets = effective_offsets.copy()
+
+            if weights is None:
+                return None, updated_offsets
+
+            # Global SPSA reference at the event.
+            upper = scale / (base_offset + 1.0) ** exponent
+            reference = scale / (k + base_offset + 1.0) ** exponent
+
+            # Shared interpolation interval.
+            lower = min(ratio * reference, upper)
+
+            targets = {
+                generation: lower + weight * (upper - lower)
+                for generation, weight in weights.items()
+            }
+
+            parameter_changes = {}
+
+            for name in self._active_parameter_names:
+                generation = self._parameter_birth_generations[name]
+                key = str(generation)
+
+                # Unselected generations are left unchanged.
+                if key not in targets:
+                    continue
+
+                age = self._parameter_schedule_steps[name]
+                old_offset = effective_offsets[name]
+
+                current = scale / (
+                    age + old_offset + 1.0
+                ) ** exponent
+
+                target = targets[key]
+
+                # Rejuvenation must never decrease the schedule value.
+                if target > current:
+                    new_value = target
+                    new_offset = (
+                        (scale / new_value) ** (1.0 / exponent)
+                        - age
+                        - 1.0
+                    )
+                else:
+                    # Preserve the original offset exactly if no
+                    # rejuvenation is necessary.
+                    new_value = current
+                    new_offset = old_offset
+
+                updated_offsets[name] = float(new_offset)
+
+                parameter_changes[name] = {
+                    "generation": int(generation),
+                    "age": int(age),
+                    "before": float(current),
+                    "target": float(target),
+                    "after": float(new_value),
+                    "offset_before": float(old_offset),
+                    "offset_after": float(new_offset),
+                }
+
+            diagnostics = {
+                "global_reference": float(reference),
+                "lower": float(lower),
+                "upper": float(upper),
+                "ratio": float(ratio),
+                "weights": dict(weights),
+                "targets": {
+                    key: float(value)
+                    for key, value in targets.items()
+                },
+                "parameters": parameter_changes,
+            }
+
+            return diagnostics, updated_offsets
+
+        # Calculate both modifications before committing either one.
+        lr_event, new_lr_offsets = rejuvenate_schedule(
+            weights=cfg["learning_rate_weights"],
+            ratio=cfg["learning_rate_ratio"],
+            scale=hp["a"],
+            exponent=hp["alpha"],
+            base_offset=hp["stability_constant"],
+            effective_offsets=self._parameter_effective_lr_offsets,
+        )
+
+        c_event, new_c_offsets = rejuvenate_schedule(
+            weights=cfg["perturbation_weights"],
+            ratio=cfg["perturbation_ratio"],
+            scale=hp["c"],
+            exponent=hp["gamma"],
+            base_offset=0.0,
+            effective_offsets=self._parameter_effective_c_offsets,
+        )
+
+        event = {
+            "global_step": int(k),
+            "after_generation": cfg["after_generation"],
+            "selected_generations": sorted(
+                {
+                    int(g)
+                    for mapping in (
+                        cfg["learning_rate_weights"],
+                        cfg["perturbation_weights"],
+                    )
+                    if mapping is not None
+                    for g in mapping
+                }
+            ),
+            "learning_rate": lr_event,
+            "perturbation": c_event,
+        }
+
+        # Commit the schedule changes.
+        self._parameter_effective_lr_offsets = new_lr_offsets
+        self._parameter_effective_c_offsets = new_c_offsets
+
+        self._rejuvenation_applied = True
+        self._last_rejuvenation_event = deepcopy(event)
+
+        logger.info(
+            "Applied SPSA schedule rejuvenation at global step %d "
+            "to generations %s.",
+            k,
+            event["selected_generations"],
+        )
+
+        return deepcopy(event)
 
     @staticmethod
     def calibrate(
