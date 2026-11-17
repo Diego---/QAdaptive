@@ -627,6 +627,12 @@ class SPSA(StepwiseOptimizer):
         Each parameter's optimization age is reset to zero. Birth iterations
         are preserved, so the birth-dependent starting offsets remain unchanged.
         """
+        if self._rejuvenation_config is not None:
+            raise RuntimeError(
+                "Restarting parameter schedules is incompatible with "
+                "configured SPSA rejuvenation."
+            )
+
         if not self.uses_parameter_dependent_schedules:
             raise RuntimeError(
                 "Cannot restore parameter schedules when neither SPSA schedule "
